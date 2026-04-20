@@ -46,17 +46,20 @@ const LOCALE = detectLocale();
 
 const L10N = {
   en: {
-    project: 'project', session: 'session', usage: 'usage', env: 'env', mem: 'mem',
+    project: 'Project', context: 'Context', session: 'Session',
+    usage: 'Usage', env: 'Env', mem: 'Memory',
     noEnv: '(no env)',
     months: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
   },
   'zh-Hant': {
-    project: '專案', session: '工作階段', usage: '用量', env: '環境', mem: '記憶',
+    project: '專案', context: 'Context', session: '工作階段',
+    usage: '用量', env: '環境', mem: '記憶',
     noEnv: '（無環境）',
     months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
   },
   'zh-Hans': {
-    project: '项目', session: '会话', usage: '用量', env: '环境', mem: '记忆',
+    project: '项目', context: 'Context', session: '会话',
+    usage: '用量', env: '环境', mem: '记忆',
     noEnv: '（无环境）',
     months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
   },
@@ -194,7 +197,8 @@ function colorPct(pct) {
 // ── Labels ────────────────────────────────────────────────────
 
 const ICONS = {
-  project: '▸',
+  project: '★',
+  context: '✎',
   session: '◎',
   usage:   '◈',
   env:     '⊕',
@@ -203,6 +207,7 @@ const ICONS = {
 
 const LABEL_COLORS = {
   project: '\x1b[1;97m',
+  context: '\x1b[1;97m',
   session: '\x1b[1;97m',
   usage:   '\x1b[1;97m',
   env:     '\x1b[1;97m',
@@ -284,16 +289,19 @@ function render(data) {
     (branchTag ? `  ${branchTag}` : '')
   );
 
-  // ── ◎ session  (ctx bar in label area, session ID as content)
-  if (sessionId) {
-    const ctxBar = ctxPct != null
-      ? ` ${A.bold}${colorPct(ctxPct)}${quotaBar(ctxPct, 8)}${A.reset} ${A.bold}${colorPct(ctxPct)}${ctxPct}%${A.reset}`
-      : '';
-    const sessionLbl = `\x1b[1;97m◎ ${t('session')}${A.reset}${ctxBar}  `;
-    rows.push(sessionLbl + `${A.gray}${sessionId}${A.reset}`);
+  // ── ✎ Context  (ctx bar, own row)
+  if (ctxPct != null) {
+    const c = colorPct(ctxPct);
+    rows.push(lbl('context') +
+      `${A.bold}${c}${quotaBar(ctxPct)}${A.reset} ${A.bold}${c}${ctxPct}%${A.reset}`);
   }
 
-  // ── 📊 usage: 5h │ 7d side by side
+  // ── ◎ session  (ID only)
+  if (sessionId) {
+    rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}`);
+  }
+
+  // ── ◈ usage: 5h │ 7d side by side
   {
     const c5 = colorPct(fivePct);
     const c7 = colorPct(sevenPct);
@@ -304,14 +312,16 @@ function render(data) {
     rows.push(lbl('usage') + fiveStr + `   ${A.gray}│${A.reset}   ` + sevenStr);
   }
 
-  // ── 🪐 env
+  // ── ⊕ env  (name ▶︎ path)
   if (envName) {
     const nameTag = `${A.bold}${A.cyan}${envName}${A.reset}`;
-    const pathTag = envDir ? `  ${A.gray}│${A.reset}  ${A.gray}${homeShortenPath(envDir)}${A.reset}` : '';
+    const pathTag = envDir
+      ? ` ${A.gray}▶︎${A.reset} ${A.gray}${homeShortenPath(envDir)}${A.reset}`
+      : '';
     rows.push(lbl('env') + nameTag + pathTag);
   }
 
-  // ── 🧠 mem
+  // ── ◆ mem
   if (memDir) {
     rows.push(lbl('mem') + `${A.gray}${shortenMemPath(memDir)}${A.reset}`);
   }
