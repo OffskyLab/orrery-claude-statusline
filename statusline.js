@@ -101,8 +101,16 @@ function quotaBar(pct, width = 8) {
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 
-// Absolute reset time: "18:30" (same day) or "Apr 23 14:00" (different day)
+// Absolute reset time: "18:30 +0800" (same day) or "Apr 23 14:00 +0800" (different day)
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function tzOffset() {
+  const off = -new Date().getTimezoneOffset(); // minutes, positive = east
+  const sign = off >= 0 ? '+' : '-';
+  const h = String(Math.floor(Math.abs(off) / 60)).padStart(2, '0');
+  const m = String(Math.abs(off) % 60).padStart(2, '0');
+  return `${sign}${h}${m}`;
+}
 
 function resetTimeStr(resetsAt) {
   if (!resetsAt) return '';
@@ -110,7 +118,8 @@ function resetTimeStr(resetsAt) {
   const now = new Date();
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
-  const time = `${hh}:${mm}`;
+  const tz = tzOffset();
+  const time = `${hh}:${mm} ${tz}`;
   const sameDay = d.getFullYear() === now.getFullYear()
     && d.getMonth() === now.getMonth()
     && d.getDate() === now.getDate();
