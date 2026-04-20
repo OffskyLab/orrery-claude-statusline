@@ -325,7 +325,8 @@ function lbl(key) {
 function render(data) {
   const cwd       = data.cwd || process.cwd();
   const sessionId = data.session_id || '';
-  const ctxPct    = data.context_window?.used_percentage ?? null;
+  const ctxPct    = data.context_window?.used_percentage != null
+    ? parseFloat(data.context_window.used_percentage.toFixed(2)) : null;
 
   let rl = data.rate_limits;
   const hasLive = rl && (rl.five_hour || rl.seven_day);
@@ -337,8 +338,8 @@ function render(data) {
 
   const fiveH    = rl.five_hour  || {};
   const sevenD   = rl.seven_day  || {};
-  const fivePct  = fiveH.used_percentage  ?? 0;
-  const sevenPct = sevenD.used_percentage ?? 0;
+  const fivePct  = parseFloat((fiveH.used_percentage  ?? 0).toFixed(2));
+  const sevenPct = parseFloat((sevenD.used_percentage ?? 0).toFixed(2));
 
   // Account info (cached 24h; read live on miss)
   let acct = loadAccountCache();
