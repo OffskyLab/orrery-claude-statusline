@@ -289,16 +289,16 @@ function render(data) {
     (branchTag ? `  ${branchTag}` : '')
   );
 
+  // ── ◎ session  (ID only)
+  if (sessionId) {
+    rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}`);
+  }
+
   // ── ✎ Context  (ctx bar, own row)
   if (ctxPct != null) {
     const c = colorPct(ctxPct);
     rows.push(lbl('context') +
       `${A.bold}${c}${quotaBar(ctxPct)}${A.reset} ${A.bold}${c}${ctxPct}%${A.reset}`);
-  }
-
-  // ── ◎ session  (ID only)
-  if (sessionId) {
-    rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}`);
   }
 
   // ── ◈ usage: 5h │ 7d side by side
