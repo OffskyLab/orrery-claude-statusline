@@ -312,10 +312,9 @@ function render(data) {
   const barW5 = Math.floor(totalBarW / 2);
   const barW7 = totalBarW - barW5;
 
-  // ── ✎ Context  (right edge aligns with end of usage row)
+  // ── ✎ Context  (bar width = barW5, aligns with 5h bar)
   if (ctxPct != null) {
-    const ctxPctLen = String(ctxPct).length + 1;
-    const ctxBarW = Math.max(8, barW5 + barW7 + (fixedUsage - LABEL_WIDTH) - 1 - ctxPctLen);
+    const ctxBarW = Math.max(8, barW5);
     const c = colorPct(ctxPct);
     rows.push(lbl('context') +
       `${A.bold}${c}${quotaBar(ctxPct, ctxBarW)}${A.reset} ${A.bold}${c}${ctxPct}%${A.reset}`);
