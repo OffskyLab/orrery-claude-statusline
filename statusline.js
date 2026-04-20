@@ -299,29 +299,36 @@ function render(data) {
     rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}`);
   }
 
-  // ── ✎ Context  (ctx bar sized to align with │ in usage row)
+  const termW = process.stdout.columns || process.stderr.columns || 120;
+
+  // ── ✎ Context  (bar fills terminal width)
   if (ctxPct != null) {
-    // Measure the visible width of the 5h section (up to and including trailing spaces before │)
-    const fiveResetStr = fiveH.resets_at ? ` ↺ ${resetTimeStr(fiveH.resets_at)}   ` : '';
-    const fiveRef = `5h ${quotaBar(fivePct)} ${fivePct}%${fiveResetStr}`;
-    const targetW = visibleWidth(fiveRef);
-    // Context renders as: [bar] [ctxPct]%  →  barW + 1 + digits + 1 = targetW
     const pctLen = String(ctxPct).length + 1; // e.g. "76%" = 3
-    const barW = Math.max(8, targetW - 1 - pctLen);
+    const barW = Math.max(8, termW - LABEL_WIDTH - 1 - pctLen);
     const c = colorPct(ctxPct);
     rows.push(lbl('context') +
       `${A.bold}${c}${quotaBar(ctxPct, barW)}${A.reset} ${A.bold}${c}${ctxPct}%${A.reset}`);
   }
 
-  // ── ◈ usage: 5h │ 7d side by side
+  // ── ◈ usage: 5h │ 7d side by side (bars split remaining width evenly)
   {
     const c5 = colorPct(fivePct);
     const c7 = colorPct(sevenPct);
-    const fiveReset  = fiveH.resets_at  ? ` ${A.gray}↺ ${resetTimeStr(fiveH.resets_at)}${A.reset}`  : '';
-    const sevenReset = sevenD.resets_at ? ` ${A.gray}↺ ${resetTimeStr(sevenD.resets_at)}${A.reset}` : '';
-    const fiveStr  = `${A.dim}5h${A.reset} ${A.bold}${c5}${quotaBar(fivePct)}${A.reset} ${A.bold}${c5}${fivePct}%${A.reset}${fiveReset}`;
-    const sevenStr = `${A.dim}7d${A.reset} ${A.bold}${c7}${quotaBar(sevenPct)}${A.reset} ${A.bold}${c7}${sevenPct}%${A.reset}${sevenReset}`;
-    rows.push(lbl('usage') + fiveStr + `   ${A.gray}│${A.reset}   ` + sevenStr);
+    const reset5Plain = fiveH.resets_at  ? ` ↺ ${resetTimeStr(fiveH.resets_at)}`  : '';
+    const reset7Plain = sevenD.resets_at ? ` ↺ ${resetTimeStr(sevenD.resets_at)}` : '';
+    // fixed cols: label + "5h " + " X%" + reset5 + "  │  " + "7d " + " X%" + reset7
+    const fixed = LABEL_WIDTH
+      + 3 + 1 + String(fivePct).length + 1 + displayWidth(reset5Plain)
+      + 5
+      + 3 + 1 + String(sevenPct).length + 1 + displayWidth(reset7Plain);
+    const totalBarW = Math.max(16, termW - fixed);
+    const barW5 = Math.floor(totalBarW / 2);
+    const barW7 = totalBarW - barW5;
+    const fiveReset  = reset5Plain ? ` ${A.gray}${reset5Plain.trim()}${A.reset}` : '';
+    const sevenReset = reset7Plain ? ` ${A.gray}${reset7Plain.trim()}${A.reset}` : '';
+    const fiveStr  = `${A.dim}5h${A.reset} ${A.bold}${c5}${quotaBar(fivePct, barW5)}${A.reset} ${A.bold}${c5}${fivePct}%${A.reset}${fiveReset}`;
+    const sevenStr = `${A.dim}7d${A.reset} ${A.bold}${c7}${quotaBar(sevenPct, barW7)}${A.reset} ${A.bold}${c7}${sevenPct}%${A.reset}${sevenReset}`;
+    rows.push(lbl('usage') + fiveStr + `  ${A.gray}│${A.reset}  ` + sevenStr);
   }
 
   // ── ⊕ env  (name ▶︎ path)
