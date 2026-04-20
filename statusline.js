@@ -16,8 +16,6 @@ process.stdin.on('end', () => {
 });
 
 // ── Rate-limit cache ──────────────────────────────────────────
-// Persists the last known rate_limits so the statusline shows
-// real data immediately on startup, before the first API call.
 
 const CACHE_FILE = path.join(os.homedir(), '.orrery', 'statusline-cache.json');
 
@@ -33,6 +31,39 @@ function saveRateLimitsCache(rl) {
   try {
     fs.writeFileSync(CACHE_FILE, JSON.stringify({ rate_limits: rl, ts: Date.now() }));
   } catch {}
+}
+
+// ── i18n ──────────────────────────────────────────────────────
+
+function detectLocale() {
+  const lang = process.env.LANG || process.env.LC_ALL || process.env.LC_MESSAGES || '';
+  if (/zh[-_](TW|HK|MO|Hant)/i.test(lang)) return 'zh-Hant';
+  if (/zh[-_](CN|SG|Hans)/i.test(lang)) return 'zh-Hans';
+  return 'en';
+}
+
+const LOCALE = detectLocale();
+
+const L10N = {
+  en: {
+    project: 'project', session: 'session', usage: 'usage', env: 'env', mem: 'mem',
+    noEnv: '(no env)',
+    months: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
+  },
+  'zh-Hant': {
+    project: '專案', session: '工作階段', usage: '用量', env: '環境', mem: '記憶',
+    noEnv: '（無環境）',
+    months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
+  },
+  'zh-Hans': {
+    project: '项目', session: '会话', usage: '用量', env: '环境', mem: '记忆',
+    noEnv: '（无环境）',
+    months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
+  },
+};
+
+function t(key) {
+  return (L10N[LOCALE] || L10N.en)[key] ?? L10N.en[key];
 }
 
 // ── Orrery helpers ────────────────────────────────────────────
@@ -89,11 +120,24 @@ function gitDirtyCount(cwd) {
 
 // ── Display helpers ───────────────────────────────────────────
 
-function shortenPath(p) {
+// Replace home dir with ~, but do NOT truncate further (show full path)
+function homeShortenPath(p) {
   const home = os.homedir();
-  const s = p.startsWith(home) ? '~' + p.slice(home.length) : p;
+  return p.startsWith(home) ? '~' + p.slice(home.length) : p;
+}
+
+// For cwd: keep last 4 segments with '…/' prefix if long
+function shortenCwd(p) {
+  const s = homeShortenPath(p);
   const parts = s.split('/');
   return parts.length > 5 ? '…/' + parts.slice(-4).join('/') : s;
+}
+
+// For memory: show from '/claude/projects/' onward with '…' prefix
+function shortenMemPath(p) {
+  const marker = '/claude/projects/';
+  const idx = p.indexOf(marker);
+  return idx >= 0 ? '…' + p.slice(idx) : homeShortenPath(p);
 }
 
 function quotaBar(pct, width = 8) {
@@ -101,40 +145,8 @@ function quotaBar(pct, width = 8) {
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 
-// ── i18n ──────────────────────────────────────────────────────
-
-function detectLocale() {
-  const lang = process.env.LANG || process.env.LC_ALL || process.env.LC_MESSAGES || '';
-  if (/zh[-_](TW|HK|MO|Hant)/i.test(lang)) return 'zh-Hant';
-  if (/zh[-_](CN|SG|Hans)/i.test(lang)) return 'zh-Hans';
-  return 'en';
-}
-
-const LOCALE = detectLocale();
-
-const L10N = {
-  en: {
-    env: 'env', path: 'path', mem: 'mem', noEnv: '(no env)',
-    months: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
-  },
-  'zh-Hant': {
-    env: '環境', path: '路徑', mem: '記憶', noEnv: '（無環境）',
-    months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
-  },
-  'zh-Hans': {
-    env: '环境', path: '路径', mem: '记忆', noEnv: '（无环境）',
-    months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
-  },
-};
-
-function t(key) {
-  return (L10N[LOCALE] || L10N.en)[key] || (L10N.en)[key];
-}
-
-// ── Absolute reset time ───────────────────────────────────────
-
 function tzOffset() {
-  const off = -new Date().getTimezoneOffset(); // minutes, positive = east
+  const off = -new Date().getTimezoneOffset();
   const sign = off >= 0 ? '+' : '-';
   const h = String(Math.floor(Math.abs(off) / 60)).padStart(2, '0');
   const m = String(Math.abs(off) % 60).padStart(2, '0');
@@ -175,6 +187,9 @@ function colorPct(pct) {
   return A.red;
 }
 
+// Label column: pad to 9 display columns (longest label "project" = 7 + 2 spaces)
+const LABEL_WIDTH = 9;
+
 function displayWidth(s) {
   let w = 0;
   for (const ch of s) {
@@ -192,16 +207,18 @@ function displayWidth(s) {
 }
 
 function lbl(s) {
-  const pad = Math.max(0, 5 - displayWidth(s));
+  const pad = Math.max(0, LABEL_WIDTH - displayWidth(s));
   return `${A.dim}${s}${' '.repeat(pad)}${A.reset}`;
 }
 
 // ── Render ────────────────────────────────────────────────────
 
 function render(data) {
-  const cwd = data.cwd || process.cwd();
+  const cwd       = data.cwd || process.cwd();
+  const sessionId = data.session_id || '';
+  const ctxPct    = data.context_window?.used_percentage ?? null;
 
-  // Use live rate_limits if present; fall back to cache; save when live data arrives.
+  // Rate limits: live → cache fallback
   let rl = data.rate_limits;
   const hasLive = rl && (rl.five_hour || rl.seven_day);
   if (hasLive) {
@@ -210,8 +227,8 @@ function render(data) {
     rl = loadRateLimitsCache() || {};
   }
 
-  const fiveH   = rl.five_hour  || {};
-  const sevenD  = rl.seven_day  || {};
+  const fiveH    = rl.five_hour  || {};
+  const sevenD   = rl.seven_day  || {};
   const fivePct  = fiveH.used_percentage  ?? 0;
   const sevenPct = sevenD.used_percentage ?? 0;
 
@@ -223,38 +240,45 @@ function render(data) {
 
   const rows = [];
 
-  // ── Row 1: env  dir  branch
-  const envTag = envName
-    ? `${A.cyan}${A.bold}${envName}${A.reset}`
-    : `${A.gray}${t('noEnv')}${A.reset}`;
-  const cwdTag = `${A.gray}${shortenPath(cwd)}${A.reset}`;
+  // ── project: cwd  branch (dirty)
   const branchTag = branch
-    ? `  ${A.green}${branch}${dirty ? `${A.reset} ${A.yellow}(${dirty})` : ''}${A.reset}`
+    ? `${A.green}${branch}${dirty ? ` ${A.yellow}(${dirty})` : ''}${A.reset}`
     : '';
-  rows.push(lbl(t('env')) + envTag + '  ' + cwdTag + branchTag);
+  rows.push(
+    lbl(t('project')) +
+    `${A.gray}${shortenCwd(cwd)}${A.reset}` +
+    (branchTag ? `  ${branchTag}` : '')
+  );
 
-  // ── Row 2: 5h and 7d side by side
+  // ── session: id  |  context %
+  if (sessionId) {
+    const ctxTag = ctxPct != null
+      ? `  ${A.gray}│${A.reset}  ${A.dim}ctx${A.reset} ${colorPct(ctxPct)}${ctxPct}%${A.reset}`
+      : '';
+    rows.push(lbl(t('session')) + `${A.gray}${sessionId}${A.reset}` + ctxTag);
+  }
+
+  // ── usage: 5h and 7d side by side
   {
     const c5 = colorPct(fivePct);
     const c7 = colorPct(sevenPct);
-
     const fiveReset  = fiveH.resets_at  ? ` ${A.gray}↺ ${resetTimeStr(fiveH.resets_at)}${A.reset}`  : '';
     const sevenReset = sevenD.resets_at ? ` ${A.gray}↺ ${resetTimeStr(sevenD.resets_at)}${A.reset}` : '';
-
     const fiveStr  = `${A.dim}5h${A.reset} ${c5}${quotaBar(fivePct)}${A.reset} ${c5}${fivePct}%${A.reset}${fiveReset}`;
     const sevenStr = `${A.dim}7d${A.reset} ${c7}${quotaBar(sevenPct)}${A.reset} ${c7}${sevenPct}%${A.reset}${sevenReset}`;
-
-    rows.push(lbl('') + fiveStr + `   ${A.gray}│${A.reset}   ` + sevenStr);
+    rows.push(lbl(t('usage')) + fiveStr + `   ${A.gray}│${A.reset}   ` + sevenStr);
   }
 
-  // ── Row 3: env path
-  if (envDir) {
-    rows.push(lbl(t('path')) + `${A.gray}${shortenPath(envDir)}${A.reset}`);
+  // ── env: name | full path
+  if (envName) {
+    const envTag = `${A.cyan}${A.bold}${envName}${A.reset}`;
+    const pathTag = envDir ? `  ${A.gray}│${A.reset}  ${A.gray}${homeShortenPath(envDir)}${A.reset}` : '';
+    rows.push(lbl(t('env')) + envTag + pathTag);
   }
 
-  // ── Row 4: memory path
+  // ── mem: …/claude/projects/{key}/memory
   if (memDir) {
-    rows.push(lbl(t('mem')) + `${A.gray}${shortenPath(memDir)}${A.reset}`);
+    rows.push(lbl(t('mem')) + `${A.gray}${shortenMemPath(memDir)}${A.reset}`);
   }
 
   return rows.join('\n') + '\n';
