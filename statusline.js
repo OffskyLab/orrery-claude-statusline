@@ -284,12 +284,13 @@ function render(data) {
     (branchTag ? `  ${branchTag}` : '')
   );
 
-  // ── 💬 session
+  // ── ◎ session  (ctx bar in label area, session ID as content)
   if (sessionId) {
-    const ctxTag = ctxPct != null
-      ? `  ${A.gray}│${A.reset}  ${A.dim}ctx${A.reset} ${A.bold}${colorPct(ctxPct)}${ctxPct}%${A.reset}`
+    const ctxBar = ctxPct != null
+      ? ` ${A.bold}${colorPct(ctxPct)}${quotaBar(ctxPct, 8)}${A.reset} ${A.bold}${colorPct(ctxPct)}${ctxPct}%${A.reset}`
       : '';
-    rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}` + ctxTag);
+    const sessionLbl = `\x1b[1;97m◎ ${t('session')}${A.reset}${ctxBar}  `;
+    rows.push(sessionLbl + `${A.gray}${sessionId}${A.reset}`);
   }
 
   // ── 📊 usage: 5h │ 7d side by side
