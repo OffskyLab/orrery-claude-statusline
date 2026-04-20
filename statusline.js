@@ -101,8 +101,37 @@ function quotaBar(pct, width = 8) {
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 
-// Absolute reset time: "18:30 +0800" (same day) or "Apr 23 14:00 +0800" (different day)
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+// ── i18n ──────────────────────────────────────────────────────
+
+function detectLocale() {
+  const lang = process.env.LANG || process.env.LC_ALL || process.env.LC_MESSAGES || '';
+  if (/zh[-_](TW|HK|MO|Hant)/i.test(lang)) return 'zh-Hant';
+  if (/zh[-_](CN|SG|Hans)/i.test(lang)) return 'zh-Hans';
+  return 'en';
+}
+
+const LOCALE = detectLocale();
+
+const L10N = {
+  en: {
+    env: 'env', path: 'path', mem: 'mem', noEnv: '(no env)',
+    months: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
+  },
+  'zh-Hant': {
+    env: '環境', path: '路徑', mem: '記憶', noEnv: '（無環境）',
+    months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
+  },
+  'zh-Hans': {
+    env: '环境', path: '路径', mem: '记忆', noEnv: '（无环境）',
+    months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
+  },
+};
+
+function t(key) {
+  return (L10N[LOCALE] || L10N.en)[key] || (L10N.en)[key];
+}
+
+// ── Absolute reset time ───────────────────────────────────────
 
 function tzOffset() {
   const off = -new Date().getTimezoneOffset(); // minutes, positive = east
@@ -120,10 +149,11 @@ function resetTimeStr(resetsAt) {
   const mm = String(d.getMinutes()).padStart(2, '0');
   const tz = tzOffset();
   const time = `${hh}:${mm} ${tz}`;
+  const months = t('months');
   const sameDay = d.getFullYear() === now.getFullYear()
     && d.getMonth() === now.getMonth()
     && d.getDate() === now.getDate();
-  return sameDay ? time : `${MONTHS[d.getMonth()]} ${d.getDate()} ${time}`;
+  return sameDay ? time : `${months[d.getMonth()]}${d.getDate()}日 ${time}`;
 }
 
 // ── ANSI ──────────────────────────────────────────────────────
@@ -145,8 +175,25 @@ function colorPct(pct) {
   return A.red;
 }
 
+function displayWidth(s) {
+  let w = 0;
+  for (const ch of s) {
+    const cp = ch.codePointAt(0);
+    if ((cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0x303E) ||
+        (cp >= 0x3040 && cp <= 0x33FF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
+        (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xAC00 && cp <= 0xD7AF) ||
+        (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFF00 && cp <= 0xFF60)) {
+      w += 2;
+    } else {
+      w += 1;
+    }
+  }
+  return w;
+}
+
 function lbl(s) {
-  return `${A.dim}${s.padEnd(5)}${A.reset}`;
+  const pad = Math.max(0, 5 - displayWidth(s));
+  return `${A.dim}${s}${' '.repeat(pad)}${A.reset}`;
 }
 
 // ── Render ────────────────────────────────────────────────────
@@ -179,12 +226,12 @@ function render(data) {
   // ── Row 1: env  dir  branch
   const envTag = envName
     ? `${A.cyan}${A.bold}${envName}${A.reset}`
-    : `${A.gray}(no env)${A.reset}`;
+    : `${A.gray}${t('noEnv')}${A.reset}`;
   const cwdTag = `${A.gray}${shortenPath(cwd)}${A.reset}`;
   const branchTag = branch
     ? `  ${A.green}${branch}${dirty ? `${A.reset} ${A.yellow}(${dirty})` : ''}${A.reset}`
     : '';
-  rows.push(lbl('env') + envTag + '  ' + cwdTag + branchTag);
+  rows.push(lbl(t('env')) + envTag + '  ' + cwdTag + branchTag);
 
   // ── Row 2: 5h and 7d side by side
   {
@@ -202,12 +249,12 @@ function render(data) {
 
   // ── Row 3: env path
   if (envDir) {
-    rows.push(lbl('path') + `${A.gray}${shortenPath(envDir)}${A.reset}`);
+    rows.push(lbl(t('path')) + `${A.gray}${shortenPath(envDir)}${A.reset}`);
   }
 
   // ── Row 4: memory path
   if (memDir) {
-    rows.push(lbl('mem') + `${A.gray}${shortenPath(memDir)}${A.reset}`);
+    rows.push(lbl(t('mem')) + `${A.gray}${shortenPath(memDir)}${A.reset}`);
   }
 
   return rows.join('\n') + '\n';
