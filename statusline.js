@@ -2,6 +2,7 @@
 'use strict';
 
 const { execFileSync } = require('child_process');
+const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -15,22 +16,84 @@ process.stdin.on('end', () => {
   try { process.stdout.write(render(data)); } catch {}
 });
 
-// ── Rate-limit cache ──────────────────────────────────────────
+// ── Cache ─────────────────────────────────────────────────────
 
 const CACHE_FILE = path.join(os.homedir(), '.orrery', 'statusline-cache.json');
 
-function loadRateLimitsCache() {
+function readCache() {
+  try { return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); } catch {}
+  return {};
+}
+
+function writeCache(patch) {
   try {
-    const c = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
-    if (Date.now() - c.ts < 8 * 3600 * 1000) return c.rate_limits;
+    const c = readCache();
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(Object.assign(c, patch)));
   } catch {}
+}
+
+function loadRateLimitsCache() {
+  const c = readCache();
+  if (c.rate_limits && Date.now() - (c.ts || 0) < 8 * 3600 * 1000) return c.rate_limits;
   return null;
 }
 
 function saveRateLimitsCache(rl) {
+  writeCache({ rate_limits: rl, ts: Date.now() });
+}
+
+function loadAccountCache() {
+  const c = readCache();
+  if (c.account && Date.now() - (c.account_ts || 0) < 24 * 3600 * 1000) return c.account;
+  return null;
+}
+
+function saveAccountCache(acct) {
+  writeCache({ account: acct, account_ts: Date.now() });
+}
+
+// ── Account info ──────────────────────────────────────────────
+
+function claudeKeychainService(configDir) {
+  if (!configDir) return 'Claude Code-credentials';
+  const normalized = configDir.normalize('NFC');
+  const hex = crypto.createHash('sha256').update(normalized, 'utf8').digest('hex').slice(0, 8);
+  return `Claude Code-credentials-${hex}`;
+}
+
+function readClaudeAccount() {
+  const configDir = process.env.CLAUDE_CONFIG_DIR || null;
+
+  let email = null;
   try {
-    fs.writeFileSync(CACHE_FILE, JSON.stringify({ rate_limits: rl, ts: Date.now() }));
+    const p = configDir
+      ? path.join(configDir, '.claude.json')
+      : path.join(os.homedir(), '.claude.json');
+    email = JSON.parse(fs.readFileSync(p, 'utf8'))?.oauthAccount?.emailAddress || null;
   } catch {}
+
+  let plan = null;
+  if (process.platform === 'darwin') {
+    try {
+      const svc = claudeKeychainService(configDir);
+      const user = process.env.USER || os.userInfo().username;
+      const out = execFileSync('security',
+        ['find-generic-password', '-s', svc, '-a', user, '-w'],
+        { timeout: 2000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+      ).trim();
+      plan = JSON.parse(out)?.claudeAiOauth?.subscriptionType || null;
+    } catch {}
+  }
+
+  let model = null;
+  try {
+    const p = configDir
+      ? path.join(configDir, 'settings.json')
+      : path.join(os.homedir(), '.claude', 'settings.json');
+    model = JSON.parse(fs.readFileSync(p, 'utf8'))?.model || null;
+  } catch {}
+
+  return { email, plan, model };
 }
 
 // ── i18n ──────────────────────────────────────────────────────
@@ -47,19 +110,19 @@ const LOCALE = detectLocale();
 const L10N = {
   en: {
     project: 'Project', context: 'Context', session: 'Session',
-    usage: 'Usage', env: 'Env', mem: 'Memory',
+    usage: 'Usage', env: 'Env', mem: 'Memory', acct: 'Account',
     noEnv: '(no env)',
     months: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
   },
   'zh-Hant': {
     project: '專案', context: 'Context', session: '工作階段',
-    usage: '用量', env: '環境', mem: '記憶',
+    usage: '用量', env: '環境', mem: '記憶', acct: '帳號',
     noEnv: '（無環境）',
     months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
   },
   'zh-Hans': {
     project: '项目', context: 'Context', session: '会话',
-    usage: '用量', env: '环境', mem: '记忆',
+    usage: '用量', env: '环境', mem: '记忆', acct: '帐号',
     noEnv: '（无环境）',
     months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
   },
@@ -145,17 +208,8 @@ function quotaBar(pct, width = 8) {
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 
-// Strip ANSI escape codes, then measure terminal display width
 function visibleWidth(s) {
   return displayWidth(s.replace(/\x1b\[[0-9;]*m/g, ''));
-}
-
-function tzOffset() {
-  const off = -new Date().getTimezoneOffset();
-  const sign = off >= 0 ? '+' : '-';
-  const h = String(Math.floor(Math.abs(off) / 60)).padStart(2, '0');
-  const m = String(Math.abs(off) % 60).padStart(2, '0');
-  return `${sign}${h}${m}`;
 }
 
 function resetTimeStr(resetsAt) {
@@ -178,14 +232,12 @@ const A = {
   reset:    '\x1b[0m',
   bold:     '\x1b[1m',
   dim:      '\x1b[2m',
-  // standard
   gray:     '\x1b[90m',
   white:    '\x1b[97m',
   green:    '\x1b[32m',
   yellow:   '\x1b[33m',
   red:      '\x1b[31m',
   cyan:     '\x1b[36m',
-  // bright
   bBlue:    '\x1b[1;94m',
   bCyan:    '\x1b[1;96m',
   bYellow:  '\x1b[1;93m',
@@ -199,6 +251,17 @@ function colorPct(pct) {
   return A.red;
 }
 
+function colorPlan(plan) {
+  if (!plan) return A.gray;
+  switch (plan.toLowerCase()) {
+    case 'max':    return A.bYellow;
+    case 'pro':    return A.bCyan;
+    case 'team':   return A.bBlue;
+    case 'free':   return A.gray;
+    default:       return A.gray;
+  }
+}
+
 // ── Labels ────────────────────────────────────────────────────
 
 const ICONS = {
@@ -208,6 +271,7 @@ const ICONS = {
   usage:   '◈',
   env:     '⊕',
   mem:     '◆',
+  acct:    '◉',
 };
 
 const LABEL_COLORS = {
@@ -217,6 +281,7 @@ const LABEL_COLORS = {
   usage:   '\x1b[1;97m',
   env:     '\x1b[1;97m',
   mem:     '\x1b[1;97m',
+  acct:    '\x1b[1;97m',
 };
 
 // Emoji and CJK are both 2 display columns wide
@@ -225,15 +290,15 @@ function displayWidth(s) {
   for (const ch of s) {
     const cp = ch.codePointAt(0);
     if (
-      (cp >= 0x1100  && cp <= 0x115F)  ||  // Hangul Jamo
-      (cp >= 0x2E80  && cp <= 0x303E)  ||  // CJK Radicals
-      (cp >= 0x3040  && cp <= 0x33FF)  ||  // Japanese / CJK symbols
-      (cp >= 0x3400  && cp <= 0x4DBF)  ||  // CJK Ext-A
-      (cp >= 0x4E00  && cp <= 0x9FFF)  ||  // CJK Unified
-      (cp >= 0xAC00  && cp <= 0xD7AF)  ||  // Hangul Syllables
-      (cp >= 0xF900  && cp <= 0xFAFF)  ||  // CJK Compatibility
-      (cp >= 0xFF00  && cp <= 0xFF60)  ||  // Fullwidth
-      (cp >= 0x1F300 && cp <= 0x1FAFF)     // Emoji (misc symbols, emoticons, etc.)
+      (cp >= 0x1100  && cp <= 0x115F)  ||
+      (cp >= 0x2E80  && cp <= 0x303E)  ||
+      (cp >= 0x3040  && cp <= 0x33FF)  ||
+      (cp >= 0x3400  && cp <= 0x4DBF)  ||
+      (cp >= 0x4E00  && cp <= 0x9FFF)  ||
+      (cp >= 0xAC00  && cp <= 0xD7AF)  ||
+      (cp >= 0xF900  && cp <= 0xFAFF)  ||
+      (cp >= 0xFF00  && cp <= 0xFF60)  ||
+      (cp >= 0x1F300 && cp <= 0x1FAFF)
     ) {
       w += 2;
     } else {
@@ -244,7 +309,6 @@ function displayWidth(s) {
 }
 
 // Label column: icon + space + text, padded to LABEL_WIDTH display cols
-// Longest: "💬 工作階段" = 2+1+8 = 11. Use 13 to leave 2 trailing spaces.
 const LABEL_WIDTH = 12;
 
 function lbl(key) {
@@ -276,6 +340,14 @@ function render(data) {
   const fivePct  = fiveH.used_percentage  ?? 0;
   const sevenPct = sevenD.used_percentage ?? 0;
 
+  // Account info (cached 24h; read live on miss)
+  let acct = loadAccountCache();
+  if (!acct) {
+    acct = readClaudeAccount();
+    if (acct.email || acct.plan || acct.model) saveAccountCache(acct);
+  }
+  const acctModel = data.model || acct?.model || null;
+
   const envName = currentEnvName();
   const envDir  = findEnvDir(envName);
   const branch  = gitBranch(cwd);
@@ -284,7 +356,7 @@ function render(data) {
 
   const rows = [];
 
-  // ── 📁 project
+  // ── ★ project
   const branchTag = branch
     ? `${A.bold}${A.green}${branch}${dirty ? ` ${A.yellow}(${dirty})` : ''}${A.reset}`
     : '';
@@ -294,9 +366,18 @@ function render(data) {
     (branchTag ? `  ${branchTag}` : '')
   );
 
-  // ── ◎ session  (ID only)
+  // ── ◎ session
   if (sessionId) {
     rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}`);
+  }
+
+  // ── ◉ acct  (email  plan  model)
+  {
+    const parts = [];
+    if (acct?.email) parts.push(`${A.gray}${acct.email}${A.reset}`);
+    if (acct?.plan)  parts.push(`${A.bold}${colorPlan(acct.plan)}${acct.plan}${A.reset}`);
+    if (acctModel)   parts.push(`${A.dim}${acctModel}${A.reset}`);
+    if (parts.length) rows.push(lbl('acct') + parts.join('  '));
   }
 
   const termW = process.stdout.columns || process.stderr.columns || 120;
