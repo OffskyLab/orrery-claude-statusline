@@ -145,6 +145,11 @@ function quotaBar(pct, width = 8) {
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 
+// Strip ANSI escape codes, then measure terminal display width
+function visibleWidth(s) {
+  return displayWidth(s.replace(/\x1b\[[0-9;]*m/g, ''));
+}
+
 function tzOffset() {
   const off = -new Date().getTimezoneOffset();
   const sign = off >= 0 ? '+' : '-';
@@ -294,11 +299,18 @@ function render(data) {
     rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}`);
   }
 
-  // ── ✎ Context  (ctx bar, own row)
+  // ── ✎ Context  (ctx bar sized to align with │ in usage row)
   if (ctxPct != null) {
+    // Measure the visible width of the 5h section (up to and including trailing spaces before │)
+    const fiveResetStr = fiveH.resets_at ? ` ↺ ${resetTimeStr(fiveH.resets_at)}   ` : '';
+    const fiveRef = `5h ${quotaBar(fivePct)} ${fivePct}%${fiveResetStr}`;
+    const targetW = visibleWidth(fiveRef);
+    // Context renders as: [bar] [ctxPct]%  →  barW + 1 + digits + 1 = targetW
+    const pctLen = String(ctxPct).length + 1; // e.g. "76%" = 3
+    const barW = Math.max(8, targetW - 1 - pctLen);
     const c = colorPct(ctxPct);
     rows.push(lbl('context') +
-      `${A.bold}${c}${quotaBar(ctxPct)}${A.reset} ${A.bold}${c}${ctxPct}%${A.reset}`);
+      `${A.bold}${c}${quotaBar(ctxPct, barW)}${A.reset} ${A.bold}${c}${ctxPct}%${A.reset}`);
   }
 
   // ── ◈ usage: 5h │ 7d side by side
