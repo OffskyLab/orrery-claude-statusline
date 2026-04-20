@@ -346,7 +346,7 @@ function render(data) {
     acct = readClaudeAccount();
     if (acct.email || acct.plan || acct.model) saveAccountCache(acct);
   }
-  const acctModel = data.model || acct?.model || null;
+  const acctModel = (typeof data.model === 'string' ? data.model : null) || acct?.model || null;
 
   const envName = currentEnvName();
   const envDir  = findEnvDir(envName);
