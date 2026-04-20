@@ -164,7 +164,7 @@ function resetTimeStr(resetsAt) {
   const now = new Date();
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
-  const time = `${hh}:${mm} ${tzOffset()}`;
+  const time = `${hh}:${mm}`;
   const months = t('months');
   const sameDay = d.getFullYear() === now.getFullYear()
     && d.getMonth() === now.getMonth()
@@ -301,29 +301,29 @@ function render(data) {
 
   const termW = process.stdout.columns || process.stderr.columns || 120;
 
-  // ── ✎ Context  (bar fills terminal width)
+  // Pre-calculate usage bar widths so context bar can align with them
+  const reset5Plain = fiveH.resets_at  ? ` ↺ ${resetTimeStr(fiveH.resets_at)}`  : '';
+  const reset7Plain = sevenD.resets_at ? ` ↺ ${resetTimeStr(sevenD.resets_at)}` : '';
+  const fixedUsage = LABEL_WIDTH
+    + 3 + 1 + String(fivePct).length + 1 + displayWidth(reset5Plain)
+    + 5
+    + 3 + 1 + String(sevenPct).length + 1 + displayWidth(reset7Plain);
+  const totalBarW = Math.max(16, termW - fixedUsage);
+  const barW5 = Math.floor(totalBarW / 2);
+  const barW7 = totalBarW - barW5;
+
+  // ── ✎ Context  (bar width = barW5 + barW7, aligned with usage row)
   if (ctxPct != null) {
-    const pctLen = String(ctxPct).length + 1; // e.g. "76%" = 3
-    const barW = Math.max(8, termW - LABEL_WIDTH - 1 - pctLen);
+    const ctxBarW = barW5 + barW7;
     const c = colorPct(ctxPct);
     rows.push(lbl('context') +
-      `${A.bold}${c}${quotaBar(ctxPct, barW)}${A.reset} ${A.bold}${c}${ctxPct}%${A.reset}`);
+      `${A.bold}${c}${quotaBar(ctxPct, ctxBarW)}${A.reset} ${A.bold}${c}${ctxPct}%${A.reset}`);
   }
 
-  // ── ◈ usage: 5h │ 7d side by side (bars split remaining width evenly)
+  // ── ◈ usage: 5h │ 7d side by side
   {
     const c5 = colorPct(fivePct);
     const c7 = colorPct(sevenPct);
-    const reset5Plain = fiveH.resets_at  ? ` ↺ ${resetTimeStr(fiveH.resets_at)}`  : '';
-    const reset7Plain = sevenD.resets_at ? ` ↺ ${resetTimeStr(sevenD.resets_at)}` : '';
-    // fixed cols: label + "5h " + " X%" + reset5 + "  │  " + "7d " + " X%" + reset7
-    const fixed = LABEL_WIDTH
-      + 3 + 1 + String(fivePct).length + 1 + displayWidth(reset5Plain)
-      + 5
-      + 3 + 1 + String(sevenPct).length + 1 + displayWidth(reset7Plain);
-    const totalBarW = Math.max(16, termW - fixed);
-    const barW5 = Math.floor(totalBarW / 2);
-    const barW7 = totalBarW - barW5;
     const fiveReset  = reset5Plain ? ` ${A.gray}${reset5Plain.trim()}${A.reset}` : '';
     const sevenReset = reset7Plain ? ` ${A.gray}${reset7Plain.trim()}${A.reset}` : '';
     const fiveStr  = `${A.dim}5h${A.reset} ${A.bold}${c5}${quotaBar(fivePct, barW5)}${A.reset} ${A.bold}${c5}${fivePct}%${A.reset}${fiveReset}`;
