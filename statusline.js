@@ -120,20 +120,17 @@ function gitDirtyCount(cwd) {
 
 // ── Display helpers ───────────────────────────────────────────
 
-// Replace home dir with ~, but do NOT truncate further (show full path)
 function homeShortenPath(p) {
   const home = os.homedir();
   return p.startsWith(home) ? '~' + p.slice(home.length) : p;
 }
 
-// For cwd: keep last 4 segments with '…/' prefix if long
 function shortenCwd(p) {
   const s = homeShortenPath(p);
   const parts = s.split('/');
   return parts.length > 5 ? '…/' + parts.slice(-4).join('/') : s;
 }
 
-// For memory: show from '/claude/projects/' onward with '…' prefix
 function shortenMemPath(p) {
   const marker = '/claude/projects/';
   const idx = p.indexOf(marker);
@@ -159,8 +156,7 @@ function resetTimeStr(resetsAt) {
   const now = new Date();
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
-  const tz = tzOffset();
-  const time = `${hh}:${mm} ${tz}`;
+  const time = `${hh}:${mm} ${tzOffset()}`;
   const months = t('months');
   const sameDay = d.getFullYear() === now.getFullYear()
     && d.getMonth() === now.getMonth()
@@ -171,14 +167,22 @@ function resetTimeStr(resetsAt) {
 // ── ANSI ──────────────────────────────────────────────────────
 
 const A = {
-  reset:   '\x1b[0m',
-  dim:     '\x1b[2m',
-  bold:    '\x1b[1m',
-  cyan:    '\x1b[36m',
-  green:   '\x1b[32m',
-  yellow:  '\x1b[33m',
-  red:     '\x1b[31m',
-  gray:    '\x1b[90m',
+  reset:    '\x1b[0m',
+  bold:     '\x1b[1m',
+  dim:      '\x1b[2m',
+  // standard
+  gray:     '\x1b[90m',
+  white:    '\x1b[97m',
+  green:    '\x1b[32m',
+  yellow:   '\x1b[33m',
+  red:      '\x1b[31m',
+  cyan:     '\x1b[36m',
+  // bright
+  bBlue:    '\x1b[1;94m',
+  bCyan:    '\x1b[1;96m',
+  bYellow:  '\x1b[1;93m',
+  bMagenta: '\x1b[1;95m',
+  bGreen:   '\x1b[1;92m',
 };
 
 function colorPct(pct) {
@@ -187,17 +191,40 @@ function colorPct(pct) {
   return A.red;
 }
 
-// Label column: pad to 9 display columns (longest label "project" = 7 + 2 spaces)
-const LABEL_WIDTH = 9;
+// ── Labels ────────────────────────────────────────────────────
 
+const ICONS = {
+  project: '📁',
+  session: '💬',
+  usage:   '📊',
+  env:     '🪐',
+  mem:     '🧠',
+};
+
+const LABEL_COLORS = {
+  project: A.bBlue,
+  session: A.bCyan,
+  usage:   A.bYellow,
+  env:     A.bMagenta,
+  mem:     A.bGreen,
+};
+
+// Emoji and CJK are both 2 display columns wide
 function displayWidth(s) {
   let w = 0;
   for (const ch of s) {
     const cp = ch.codePointAt(0);
-    if ((cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2E80 && cp <= 0x303E) ||
-        (cp >= 0x3040 && cp <= 0x33FF) || (cp >= 0x3400 && cp <= 0x4DBF) ||
-        (cp >= 0x4E00 && cp <= 0x9FFF) || (cp >= 0xAC00 && cp <= 0xD7AF) ||
-        (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFF00 && cp <= 0xFF60)) {
+    if (
+      (cp >= 0x1100  && cp <= 0x115F)  ||  // Hangul Jamo
+      (cp >= 0x2E80  && cp <= 0x303E)  ||  // CJK Radicals
+      (cp >= 0x3040  && cp <= 0x33FF)  ||  // Japanese / CJK symbols
+      (cp >= 0x3400  && cp <= 0x4DBF)  ||  // CJK Ext-A
+      (cp >= 0x4E00  && cp <= 0x9FFF)  ||  // CJK Unified
+      (cp >= 0xAC00  && cp <= 0xD7AF)  ||  // Hangul Syllables
+      (cp >= 0xF900  && cp <= 0xFAFF)  ||  // CJK Compatibility
+      (cp >= 0xFF00  && cp <= 0xFF60)  ||  // Fullwidth
+      (cp >= 0x1F300 && cp <= 0x1FAFF)     // Emoji (misc symbols, emoticons, etc.)
+    ) {
       w += 2;
     } else {
       w += 1;
@@ -206,9 +233,17 @@ function displayWidth(s) {
   return w;
 }
 
-function lbl(s) {
-  const pad = Math.max(0, LABEL_WIDTH - displayWidth(s));
-  return `${A.dim}${s}${' '.repeat(pad)}${A.reset}`;
+// Label column: icon + space + text, padded to LABEL_WIDTH display cols
+// Longest: "💬 工作階段" = 2+1+8 = 11. Use 13 to leave 2 trailing spaces.
+const LABEL_WIDTH = 13;
+
+function lbl(key) {
+  const icon  = ICONS[key]        || '';
+  const text  = t(key)            || key;
+  const color = LABEL_COLORS[key] || A.dim;
+  const full  = `${icon} ${text}`;
+  const pad   = Math.max(0, LABEL_WIDTH - displayWidth(full));
+  return `${color}${full}${A.reset}${' '.repeat(pad)}`;
 }
 
 // ── Render ────────────────────────────────────────────────────
@@ -218,7 +253,6 @@ function render(data) {
   const sessionId = data.session_id || '';
   const ctxPct    = data.context_window?.used_percentage ?? null;
 
-  // Rate limits: live → cache fallback
   let rl = data.rate_limits;
   const hasLive = rl && (rl.five_hour || rl.seven_day);
   if (hasLive) {
@@ -240,45 +274,45 @@ function render(data) {
 
   const rows = [];
 
-  // ── project: cwd  branch (dirty)
+  // ── 📁 project
   const branchTag = branch
-    ? `${A.green}${branch}${dirty ? ` ${A.yellow}(${dirty})` : ''}${A.reset}`
+    ? `${A.bold}${A.green}${branch}${dirty ? ` ${A.yellow}(${dirty})` : ''}${A.reset}`
     : '';
   rows.push(
-    lbl(t('project')) +
-    `${A.gray}${shortenCwd(cwd)}${A.reset}` +
+    lbl('project') +
+    `${A.white}${shortenCwd(cwd)}${A.reset}` +
     (branchTag ? `  ${branchTag}` : '')
   );
 
-  // ── session: id  |  context %
+  // ── 💬 session
   if (sessionId) {
     const ctxTag = ctxPct != null
-      ? `  ${A.gray}│${A.reset}  ${A.dim}ctx${A.reset} ${colorPct(ctxPct)}${ctxPct}%${A.reset}`
+      ? `  ${A.gray}│${A.reset}  ${A.dim}ctx${A.reset} ${A.bold}${colorPct(ctxPct)}${ctxPct}%${A.reset}`
       : '';
-    rows.push(lbl(t('session')) + `${A.gray}${sessionId}${A.reset}` + ctxTag);
+    rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}` + ctxTag);
   }
 
-  // ── usage: 5h and 7d side by side
+  // ── 📊 usage: 5h │ 7d side by side
   {
     const c5 = colorPct(fivePct);
     const c7 = colorPct(sevenPct);
     const fiveReset  = fiveH.resets_at  ? ` ${A.gray}↺ ${resetTimeStr(fiveH.resets_at)}${A.reset}`  : '';
     const sevenReset = sevenD.resets_at ? ` ${A.gray}↺ ${resetTimeStr(sevenD.resets_at)}${A.reset}` : '';
-    const fiveStr  = `${A.dim}5h${A.reset} ${c5}${quotaBar(fivePct)}${A.reset} ${c5}${fivePct}%${A.reset}${fiveReset}`;
-    const sevenStr = `${A.dim}7d${A.reset} ${c7}${quotaBar(sevenPct)}${A.reset} ${c7}${sevenPct}%${A.reset}${sevenReset}`;
-    rows.push(lbl(t('usage')) + fiveStr + `   ${A.gray}│${A.reset}   ` + sevenStr);
+    const fiveStr  = `${A.dim}5h${A.reset} ${A.bold}${c5}${quotaBar(fivePct)}${A.reset} ${A.bold}${c5}${fivePct}%${A.reset}${fiveReset}`;
+    const sevenStr = `${A.dim}7d${A.reset} ${A.bold}${c7}${quotaBar(sevenPct)}${A.reset} ${A.bold}${c7}${sevenPct}%${A.reset}${sevenReset}`;
+    rows.push(lbl('usage') + fiveStr + `   ${A.gray}│${A.reset}   ` + sevenStr);
   }
 
-  // ── env: name | full path
+  // ── 🪐 env
   if (envName) {
-    const envTag = `${A.cyan}${A.bold}${envName}${A.reset}`;
+    const nameTag = `${A.bold}${A.cyan}${envName}${A.reset}`;
     const pathTag = envDir ? `  ${A.gray}│${A.reset}  ${A.gray}${homeShortenPath(envDir)}${A.reset}` : '';
-    rows.push(lbl(t('env')) + envTag + pathTag);
+    rows.push(lbl('env') + nameTag + pathTag);
   }
 
-  // ── mem: …/claude/projects/{key}/memory
+  // ── 🧠 mem
   if (memDir) {
-    rows.push(lbl(t('mem')) + `${A.gray}${shortenMemPath(memDir)}${A.reset}`);
+    rows.push(lbl('mem') + `${A.gray}${shortenMemPath(memDir)}${A.reset}`);
   }
 
   return rows.join('\n') + '\n';
