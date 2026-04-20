@@ -202,11 +202,11 @@ const ICONS = {
 };
 
 const LABEL_COLORS = {
-  project: A.bBlue,
-  session: A.bCyan,
-  usage:   A.bYellow,
-  env:     A.bMagenta,
-  mem:     A.bGreen,
+  project: '\x1b[1;97m',
+  session: '\x1b[1;97m',
+  usage:   '\x1b[1;97m',
+  env:     '\x1b[1;97m',
+  mem:     '\x1b[1;97m',
 };
 
 // Emoji and CJK are both 2 display columns wide
