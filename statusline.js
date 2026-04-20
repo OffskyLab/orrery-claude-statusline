@@ -194,11 +194,11 @@ function colorPct(pct) {
 // ── Labels ────────────────────────────────────────────────────
 
 const ICONS = {
-  project: '📁',
-  session: '💬',
-  usage:   '📊',
-  env:     '🪐',
-  mem:     '🧠',
+  project: '▸',
+  session: '◎',
+  usage:   '◈',
+  env:     '⊕',
+  mem:     '◆',
 };
 
 const LABEL_COLORS = {
@@ -235,7 +235,7 @@ function displayWidth(s) {
 
 // Label column: icon + space + text, padded to LABEL_WIDTH display cols
 // Longest: "💬 工作階段" = 2+1+8 = 11. Use 13 to leave 2 trailing spaces.
-const LABEL_WIDTH = 13;
+const LABEL_WIDTH = 12;
 
 function lbl(key) {
   const icon  = ICONS[key]        || '';
