@@ -15,6 +15,26 @@ process.stdin.on('end', () => {
   try { process.stdout.write(render(data)); } catch {}
 });
 
+// ── Rate-limit cache ──────────────────────────────────────────
+// Persists the last known rate_limits so the statusline shows
+// real data immediately on startup, before the first API call.
+
+const CACHE_FILE = path.join(os.homedir(), '.orrery', 'statusline-cache.json');
+
+function loadRateLimitsCache() {
+  try {
+    const c = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+    if (Date.now() - c.ts < 8 * 3600 * 1000) return c.rate_limits;
+  } catch {}
+  return null;
+}
+
+function saveRateLimitsCache(rl) {
+  try {
+    fs.writeFileSync(CACHE_FILE, JSON.stringify({ rate_limits: rl, ts: Date.now() }));
+  } catch {}
+}
+
 // ── Orrery helpers ────────────────────────────────────────────
 
 function orreryHome() {
@@ -43,7 +63,6 @@ function findEnvDir(name) {
 
 function findMemoryDir(envDir, cwd) {
   if (!envDir || !cwd) return null;
-  // Claude Code project key: replace all '/' with '-'
   const key = cwd.replace(/\//g, '-');
   const p = path.join(envDir, 'claude', 'projects', key, 'memory');
   return fs.existsSync(p) ? p : null;
@@ -74,7 +93,6 @@ function shortenPath(p) {
   const home = os.homedir();
   const s = p.startsWith(home) ? '~' + p.slice(home.length) : p;
   const parts = s.split('/');
-  // keep last 4 segments; if trimmed, prepend '…/'
   return parts.length > 5 ? '…/' + parts.slice(-4).join('/') : s;
 }
 
@@ -83,16 +101,20 @@ function quotaBar(pct, width = 8) {
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 
-function countdown(resetsAt) {
+// Absolute reset time: "18:30" (same day) or "Apr 23 14:00" (different day)
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function resetTimeStr(resetsAt) {
   if (!resetsAt) return '';
-  const diff = resetsAt * 1000 - Date.now();
-  if (diff <= 0) return 'reset';
-  const m = Math.floor(diff / 60000);
-  const h = Math.floor(m / 60);
-  const d = Math.floor(h / 24);
-  if (d > 0) return `${d}d ${h % 24}h`;
-  if (h > 0) return `${h}h ${m % 60}m`;
-  return `${m}m`;
+  const d = new Date(resetsAt * 1000);
+  const now = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const time = `${hh}:${mm}`;
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth()
+    && d.getDate() === now.getDate();
+  return sameDay ? time : `${MONTHS[d.getMonth()]} ${d.getDate()} ${time}`;
 }
 
 // ── ANSI ──────────────────────────────────────────────────────
@@ -121,8 +143,17 @@ function lbl(s) {
 // ── Render ────────────────────────────────────────────────────
 
 function render(data) {
-  const cwd     = data.cwd || process.cwd();
-  const rl      = data.rate_limits || {};
+  const cwd = data.cwd || process.cwd();
+
+  // Use live rate_limits if present; fall back to cache; save when live data arrives.
+  let rl = data.rate_limits;
+  const hasLive = rl && (rl.five_hour || rl.seven_day);
+  if (hasLive) {
+    saveRateLimitsCache(rl);
+  } else {
+    rl = loadRateLimitsCache() || {};
+  }
+
   const fiveH   = rl.five_hour  || {};
   const sevenD  = rl.seven_day  || {};
   const fivePct  = fiveH.used_percentage  ?? 0;
@@ -136,7 +167,7 @@ function render(data) {
 
   const rows = [];
 
-  // ── env  +  dir  +  branch
+  // ── Row 1: env  dir  branch
   const envTag = envName
     ? `${A.cyan}${A.bold}${envName}${A.reset}`
     : `${A.gray}(no env)${A.reset}`;
@@ -146,30 +177,26 @@ function render(data) {
     : '';
   rows.push(lbl('env') + envTag + '  ' + cwdTag + branchTag);
 
-  // ── 5h quota
+  // ── Row 2: 5h and 7d side by side
   {
-    const c = colorPct(fivePct);
-    const reset = fiveH.resets_at
-      ? `  ${A.gray}resets ${countdown(fiveH.resets_at)}${A.reset}`
-      : '';
-    rows.push(lbl('5h') + `${c}${quotaBar(fivePct)}${A.reset} ${c}${fivePct}%${A.reset}` + reset);
+    const c5 = colorPct(fivePct);
+    const c7 = colorPct(sevenPct);
+
+    const fiveReset  = fiveH.resets_at  ? ` ${A.gray}↺ ${resetTimeStr(fiveH.resets_at)}${A.reset}`  : '';
+    const sevenReset = sevenD.resets_at ? ` ${A.gray}↺ ${resetTimeStr(sevenD.resets_at)}${A.reset}` : '';
+
+    const fiveStr  = `${A.dim}5h${A.reset} ${c5}${quotaBar(fivePct)}${A.reset} ${c5}${fivePct}%${A.reset}${fiveReset}`;
+    const sevenStr = `${A.dim}7d${A.reset} ${c7}${quotaBar(sevenPct)}${A.reset} ${c7}${sevenPct}%${A.reset}${sevenReset}`;
+
+    rows.push(lbl('') + fiveStr + `   ${A.gray}│${A.reset}   ` + sevenStr);
   }
 
-  // ── 7d quota
-  {
-    const c = colorPct(sevenPct);
-    const reset = sevenD.resets_at
-      ? `  ${A.gray}resets ${countdown(sevenD.resets_at)}${A.reset}`
-      : '';
-    rows.push(lbl('7d') + `${c}${quotaBar(sevenPct)}${A.reset} ${c}${sevenPct}%${A.reset}` + reset);
-  }
-
-  // ── env path
+  // ── Row 3: env path
   if (envDir) {
     rows.push(lbl('path') + `${A.gray}${shortenPath(envDir)}${A.reset}`);
   }
 
-  // ── memory path
+  // ── Row 4: memory path
   if (memDir) {
     rows.push(lbl('mem') + `${A.gray}${shortenPath(memDir)}${A.reset}`);
   }
