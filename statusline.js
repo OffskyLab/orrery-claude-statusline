@@ -52,6 +52,29 @@ function saveAccountCache(acct) {
   writeCache({ account: acct, account_ts: Date.now() });
 }
 
+// ── Compaction count (derived from transcript JSONL) ──────────
+
+function readCompactCount(transcriptPath) {
+  if (!transcriptPath) return 0;
+  try {
+    const stat = fs.statSync(transcriptPath);
+    const cacheKey = `${transcriptPath}:${stat.mtimeMs}:${stat.size}`;
+    const c = readCache();
+    if (c.compact && c.compact.key === cacheKey) return c.compact.count;
+
+    const data = fs.readFileSync(transcriptPath, 'utf8');
+    let count = 0;
+    const marker = '"isCompactSummary":true';
+    let idx = 0;
+    while ((idx = data.indexOf(marker, idx)) !== -1) {
+      count++;
+      idx += marker.length;
+    }
+    writeCache({ compact: { key: cacheKey, count } });
+    return count;
+  } catch { return 0; }
+}
+
 // ── Account info ──────────────────────────────────────────────
 
 function claudeKeychainService(configDir) {
@@ -111,19 +134,19 @@ const L10N = {
   en: {
     project: 'Project', context: 'Context', session: 'Session',
     usage: 'Usage', env: 'Env', mem: 'Memory', acct: 'Account',
-    noEnv: '(no env)',
+    noEnv: '(no env)', compactUnit: 'times',
     months: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
   },
   'zh-Hant': {
     project: '專案', context: 'Context', session: '工作階段',
     usage: '用量', env: '環境', mem: '記憶', acct: '帳號',
-    noEnv: '（無環境）',
+    noEnv: '（無環境）', compactUnit: '次',
     months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
   },
   'zh-Hans': {
     project: '项目', context: 'Context', session: '会话',
     usage: '用量', env: '环境', mem: '记忆', acct: '帐号',
-    noEnv: '（无环境）',
+    noEnv: '（无环境）', compactUnit: '次',
     months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
   },
 };
@@ -320,6 +343,15 @@ function lbl(key) {
   return `${color}${full}${A.reset}${' '.repeat(pad)}`;
 }
 
+function usageLbl(duration) {
+  const icon  = ICONS.usage;
+  const text  = t('usage');
+  const color = LABEL_COLORS.usage;
+  const full  = `${icon} ${text} ${duration}`;
+  const pad   = Math.max(0, LABEL_WIDTH - displayWidth(full));
+  return `${color}${icon} ${text}${A.reset} ${A.dim}${duration}${A.reset}${' '.repeat(pad)}`;
+}
+
 // ── Render ────────────────────────────────────────────────────
 
 function render(data) {
@@ -372,46 +404,50 @@ function render(data) {
     rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}`);
   }
 
-  // ── ◉ acct  (email  plan  model)
-  {
-    const parts = [];
-    if (acct?.email) parts.push(`${A.gray}${acct.email}${A.reset}`);
-    if (acct?.plan)  parts.push(`${A.bold}${colorPlan(acct.plan)}${acct.plan}${A.reset}`);
-    if (acctModel)   parts.push(`${A.dim}${acctModel}${A.reset}`);
-    if (parts.length) rows.push(lbl('acct') + parts.join('  '));
+  // ── ◉ acct  (email  plan  model) — only render when email is available
+  if (acct?.email) {
+    const parts = [`${A.gray}${acct.email}${A.reset}`];
+    if (acct.plan) parts.push(`${A.bold}${colorPlan(acct.plan)}${acct.plan}${A.reset}`);
+    if (acctModel) parts.push(`${A.dim}${acctModel}${A.reset}`);
+    rows.push(lbl('acct') + parts.join('  '));
   }
 
   const termW = process.stdout.columns || process.stderr.columns || 120;
 
-  // Pre-calculate usage bar widths so context bar can align with them
+  // Pre-calculate usage bar width, pad pct column so ↺ aligns across rows
   const reset5Plain = fiveH.resets_at  ? ` ↺ ${resetTimeStr(fiveH.resets_at)}`  : '';
   const reset7Plain = sevenD.resets_at ? ` ↺ ${resetTimeStr(sevenD.resets_at)}` : '';
-  const fixedUsage = LABEL_WIDTH
-    + 3 + 1 + String(fivePct).length + 1 + displayWidth(reset5Plain)
-    + 5
-    + 3 + 1 + String(sevenPct).length + 1 + displayWidth(reset7Plain);
-  const totalBarW = Math.max(16, termW - fixedUsage);
-  const barW5 = Math.floor(totalBarW / 2);
-  const barW7 = totalBarW - barW5;
+  const pct5Raw = `${fivePct}%`;
+  const pct7Raw = `${sevenPct}%`;
+  const ctxPctStr = ctxPct != null ? `${ctxPct}%` : '';
+  const pctColW = Math.max(pct5Raw.length, pct7Raw.length, ctxPctStr.length);
+  const fixed5 = LABEL_WIDTH + 1 + pctColW + displayWidth(reset5Plain);
+  const fixed7 = LABEL_WIDTH + 1 + pctColW + displayWidth(reset7Plain);
+  const BAR_MAX = 60;
+  const barW = Math.min(BAR_MAX, Math.max(16, termW - Math.max(fixed5, fixed7)));
 
-  // ── ✎ Context  (right edge of "XX%" aligns with │ in usage row)
-  if (ctxPct != null) {
-    const ctxBarW = Math.max(8,
-      barW5 + 3 + String(fivePct).length + displayWidth(reset5Plain) - String(ctxPct).length);
-    const c = colorPct(ctxPct);
-    rows.push(lbl('context') +
-      `${A.bold}${c}${quotaBar(ctxPct, ctxBarW)}${A.reset} ${A.bold}${c}${ctxPct}%${A.reset}`);
-  }
-
-  // ── ◈ usage: 5h │ 7d side by side
+  // ── ◈ usage: each row has its own "◈ Nx 用量" label; pct padded for ↺ alignment
   {
     const c5 = colorPct(fivePct);
     const c7 = colorPct(sevenPct);
     const fiveReset  = reset5Plain ? ` ${A.gray}${reset5Plain.trim()}${A.reset}` : '';
     const sevenReset = reset7Plain ? ` ${A.gray}${reset7Plain.trim()}${A.reset}` : '';
-    const fiveStr  = `${A.dim}5h${A.reset} ${A.bold}${c5}${quotaBar(fivePct, barW5)}${A.reset} ${A.bold}${c5}${fivePct}%${A.reset}${fiveReset}`;
-    const sevenStr = `${A.dim}7d${A.reset} ${A.bold}${c7}${quotaBar(sevenPct, barW7)}${A.reset} ${A.bold}${c7}${sevenPct}%${A.reset}${sevenReset}`;
-    rows.push(lbl('usage') + fiveStr + `  ${A.gray}│${A.reset}  ` + sevenStr);
+    const pct5Pad = ' '.repeat(pctColW - pct5Raw.length);
+    const pct7Pad = ' '.repeat(pctColW - pct7Raw.length);
+    const fiveStr  = `${A.bold}${c5}${quotaBar(fivePct, barW)}${A.reset} ${A.bold}${c5}${pct5Raw}${A.reset}${pct5Pad}${fiveReset}`;
+    const sevenStr = `${A.bold}${c7}${quotaBar(sevenPct, barW)}${A.reset} ${A.bold}${c7}${pct7Raw}${A.reset}${pct7Pad}${sevenReset}`;
+    rows.push(usageLbl('5h') + fiveStr);
+    rows.push(usageLbl('7d') + sevenStr);
+  }
+
+  // ── ✎ Context  (same bar width as usage; compact count aligned with ↺ in usage rows)
+  if (ctxPct != null) {
+    const c = colorPct(ctxPct);
+    const compactCount = readCompactCount(data.transcript_path);
+    const ctxPad = ' '.repeat(pctColW - ctxPctStr.length);
+    const compactStr = ` ${A.gray}⚭ ${compactCount} ${t('compactUnit')}${A.reset}`;
+    rows.push(lbl('context') +
+      `${A.bold}${c}${quotaBar(ctxPct, barW)}${A.reset} ${A.bold}${c}${ctxPctStr}${A.reset}${ctxPad}${compactStr}`);
   }
 
   // ── ⊕ env  (name ▶︎ path)
