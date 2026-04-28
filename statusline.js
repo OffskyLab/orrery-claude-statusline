@@ -42,14 +42,22 @@ function saveRateLimitsCache(rl) {
   writeCache({ rate_limits: rl, ts: Date.now() });
 }
 
+function accountCacheKey() {
+  const configDir = process.env.CLAUDE_CONFIG_DIR || '';
+  return configDir ? `account_${crypto.createHash('sha256').update(configDir).digest('hex').slice(0, 8)}` : 'account';
+}
+
 function loadAccountCache() {
   const c = readCache();
-  if (c.account && Date.now() - (c.account_ts || 0) < 24 * 3600 * 1000) return c.account;
+  const key = accountCacheKey();
+  const tsKey = `${key}_ts`;
+  if (c[key] && Date.now() - (c[tsKey] || 0) < 24 * 3600 * 1000) return c[key];
   return null;
 }
 
 function saveAccountCache(acct) {
-  writeCache({ account: acct, account_ts: Date.now() });
+  const key = accountCacheKey();
+  writeCache({ [key]: acct, [`${key}_ts`]: Date.now() });
 }
 
 // ── Compaction count (derived from transcript JSONL) ──────────
