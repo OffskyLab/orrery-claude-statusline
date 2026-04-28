@@ -44,7 +44,9 @@ function saveRateLimitsCache(rl) {
 
 function accountCacheKey() {
   const configDir = process.env.CLAUDE_CONFIG_DIR || '';
-  return configDir ? `account_${crypto.createHash('sha256').update(configDir).digest('hex').slice(0, 8)}` : 'account';
+  const envName   = process.env.ORRERY_ACTIVE_ENV  || '';
+  const seed = configDir || envName;
+  return seed ? `account_${crypto.createHash('sha256').update(seed).digest('hex').slice(0, 8)}` : 'account';
 }
 
 function loadAccountCache() {
