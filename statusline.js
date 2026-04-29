@@ -436,6 +436,16 @@ function render(data) {
   const BAR_MAX = 60;
   const barW = Math.min(BAR_MAX, Math.max(16, termW - Math.max(fixed5, fixed7)));
 
+  // ── ✎ Context  (same bar width as usage; compact count aligned with ↺ in usage rows)
+  if (ctxPct != null) {
+    const c = colorPct(ctxPct);
+    const compactCount = readCompactCount(data.transcript_path);
+    const ctxPad = ' '.repeat(pctColW - ctxPctStr.length);
+    const compactStr = ` ${A.gray}⚭ ${compactCount} ${t('compactUnit')}${A.reset}`;
+    rows.push(lbl('context') +
+      `${A.bold}${c}${quotaBar(ctxPct, barW)}${A.reset} ${A.bold}${c}${ctxPctStr}${A.reset}${ctxPad}${compactStr}`);
+  }
+
   // ── ◈ usage: each row has its own "◈ Nx 用量" label; pct padded for ↺ alignment
   {
     const c5 = colorPct(fivePct);
@@ -448,16 +458,6 @@ function render(data) {
     const sevenStr = `${A.bold}${c7}${quotaBar(sevenPct, barW)}${A.reset} ${A.bold}${c7}${pct7Raw}${A.reset}${pct7Pad}${sevenReset}`;
     rows.push(usageLbl('5h') + fiveStr);
     rows.push(usageLbl('7d') + sevenStr);
-  }
-
-  // ── ✎ Context  (same bar width as usage; compact count aligned with ↺ in usage rows)
-  if (ctxPct != null) {
-    const c = colorPct(ctxPct);
-    const compactCount = readCompactCount(data.transcript_path);
-    const ctxPad = ' '.repeat(pctColW - ctxPctStr.length);
-    const compactStr = ` ${A.gray}⚭ ${compactCount} ${t('compactUnit')}${A.reset}`;
-    rows.push(lbl('context') +
-      `${A.bold}${c}${quotaBar(ctxPct, barW)}${A.reset} ${A.bold}${c}${ctxPctStr}${A.reset}${ctxPad}${compactStr}`);
   }
 
   // ── ⊕ env  (name ▶︎ path)
