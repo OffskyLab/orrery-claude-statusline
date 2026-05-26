@@ -32,10 +32,27 @@ function writeCache(patch) {
   } catch {}
 }
 
+// mtime of the active .claude.json — used to invalidate caches when
+// `orrery use` / `/orrery:phantom` swaps the pinned account: both
+// rewrite this file as part of materialize, so a newer mtime than the
+// cache timestamp means the cached account no longer matches the live
+// credentials Claude is reading.
+function claudeJsonMtime() {
+  try {
+    const p = process.env.CLAUDE_CONFIG_DIR
+      ? path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json')
+      : path.join(os.homedir(), '.claude.json');
+    return fs.statSync(p).mtimeMs;
+  } catch { return 0; }
+}
+
 function loadRateLimitsCache() {
   const c = readCache();
-  if (c.rate_limits && Date.now() - (c.ts || 0) < 8 * 3600 * 1000) return c.rate_limits;
-  return null;
+  if (!c.rate_limits) return null;
+  const cachedTs = c.ts || 0;
+  if (Date.now() - cachedTs >= 8 * 3600 * 1000) return null;
+  if (claudeJsonMtime() > cachedTs) return null;
+  return c.rate_limits;
 }
 
 function saveRateLimitsCache(rl) {
@@ -43,18 +60,25 @@ function saveRateLimitsCache(rl) {
 }
 
 function accountCacheKey() {
+  // CLAUDE_CONFIG_DIR is the only thing that actually partitions credentials.
+  // ORRERY_ACTIVE_ENV in {unset, "", "origin"} all represent the same origin
+  // state, so don't fold it into the key — otherwise origin ends up writing
+  // under two different slots depending on whether the shell function ran.
   const configDir = process.env.CLAUDE_CONFIG_DIR || '';
-  const envName   = process.env.ORRERY_ACTIVE_ENV  || '';
-  const seed = configDir || envName;
-  return seed ? `account_${crypto.createHash('sha256').update(seed).digest('hex').slice(0, 8)}` : 'account';
+  return configDir
+    ? `account_${crypto.createHash('sha256').update(configDir).digest('hex').slice(0, 8)}`
+    : 'account';
 }
 
 function loadAccountCache() {
   const c = readCache();
   const key = accountCacheKey();
   const tsKey = `${key}_ts`;
-  if (c[key] && Date.now() - (c[tsKey] || 0) < 24 * 3600 * 1000) return c[key];
-  return null;
+  if (!c[key]) return null;
+  const cachedTs = c[tsKey] || 0;
+  if (Date.now() - cachedTs >= 24 * 3600 * 1000) return null;
+  if (claudeJsonMtime() > cachedTs) return null;
+  return c[key];
 }
 
 function saveAccountCache(acct) {
@@ -143,20 +167,20 @@ const LOCALE = detectLocale();
 const L10N = {
   en: {
     project: 'Project', context: 'Context', session: 'Session',
-    usage: 'Usage', env: 'Env', mem: 'Memory', acct: 'Account',
-    noEnv: '(no env)', compactUnit: 'times',
+    usage: 'Usage', sandbox: 'Sandbox', mem: 'Memory', acct: 'Account',
+    noSandbox: '(origin)', compactUnit: 'times',
     months: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
   },
   'zh-Hant': {
     project: '專案', context: 'Context', session: '工作階段',
-    usage: '用量', env: '環境', mem: '記憶', acct: '帳號',
-    noEnv: '（無環境）', compactUnit: '次',
+    usage: '用量', sandbox: '沙盒', mem: '記憶', acct: '帳號',
+    noSandbox: '（origin）', compactUnit: '次',
     months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
   },
   'zh-Hans': {
     project: '项目', context: 'Context', session: '会话',
-    usage: '用量', env: '环境', mem: '记忆', acct: '帐号',
-    noEnv: '（无环境）', compactUnit: '次',
+    usage: '用量', sandbox: '沙盒', mem: '记忆', acct: '帐号',
+    noSandbox: '（origin）', compactUnit: '次',
     months: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
   },
 };
@@ -302,7 +326,7 @@ const ICONS = {
   context: '✎',
   session: '◎',
   usage:   '◈',
-  env:     '⊕',
+  sandbox: '⊕',
   mem:     '◆',
   acct:    '◉',
 };
@@ -312,7 +336,7 @@ const LABEL_COLORS = {
   context: '\x1b[1;97m',
   session: '\x1b[1;97m',
   usage:   '\x1b[1;97m',
-  env:     '\x1b[1;97m',
+  sandbox: '\x1b[1;97m',
   mem:     '\x1b[1;97m',
   acct:    '\x1b[1;97m',
 };
@@ -460,13 +484,13 @@ function render(data) {
     rows.push(usageLbl('7d') + sevenStr);
   }
 
-  // ── ⊕ env  (name ▶︎ path)
+  // ── ⊕ sandbox  (name ▶︎ path)
   if (envName) {
     const nameTag = `${A.bold}${A.cyan}${envName}${A.reset}`;
     const pathTag = envDir
       ? ` ${A.gray}▶︎${A.reset} ${A.gray}${homeShortenPath(envDir)}${A.reset}`
       : '';
-    rows.push(lbl('env') + nameTag + pathTag);
+    rows.push(lbl('sandbox') + nameTag + pathTag);
   }
 
   // ── ◆ mem

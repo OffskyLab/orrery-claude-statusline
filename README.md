@@ -17,7 +17,7 @@ orrery environment, and the project's memory directory — all in a single glanc
 | ◉    | `帳號` / `Account`    | Logged-in email, subscription plan (`max` / `pro` / `team` / `free`), and the configured model. The whole row is skipped when the email cannot be read. |
 | ✎    | `Context`             | Context-window usage of the current conversation. The bar's right edge lines up with the `│` divider of the usage row below. |
 | ◈    | `用量` / `Usage`      | Claude rate-limit usage: **5h** window on the left, **7d** window on the right, each with a percentage and reset time. Cached for 8 hours so the bars stay visible between turns that don't carry live rate-limit data. |
-| ⊕    | `環境` / `Env`        | The active orrery environment (`$ORRERY_ACTIVE_ENV`) and the path to its env directory under `~/.orrery/envs/...`. |
+| ⊕    | `沙盒` / `Sandbox`    | The active orrery sandbox (`$ORRERY_ACTIVE_ENV`) and the path to its sandbox directory under `~/.orrery/envs/...`. Shows `origin` plus `~/.orrery/origin` when no sandbox is active. |
 | ◆    | `記憶` / `Memory`     | Path to the Claude memory directory for this project within the active environment. |
 
 Rows that have no data (no session id, no active env, no memory directory, no
@@ -62,8 +62,9 @@ The label language follows `$LANG` / `$LC_ALL` / `$LC_MESSAGES`:
   Non-macOS hosts simply skip this lookup.
 - **Model** — `$CLAUDE_CONFIG_DIR/settings.json` → `~/.claude/settings.json`,
   field `model`.
-- **Orrery env** — `$ORRERY_ACTIVE_ENV` plus a scan of
-  `~/.orrery/envs/*/env.json`.
+- **Active sandbox** — `$ORRERY_ACTIVE_ENV` plus a scan of
+  `~/.orrery/envs/*/env.json` (the on-disk directory name is still `envs/`
+  for compatibility with older installs).
 - **Git branch & dirty count** — `git -C <cwd> rev-parse` and
   `git -C <cwd> status --porcelain`.
 
