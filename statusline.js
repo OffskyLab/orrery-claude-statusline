@@ -18,7 +18,11 @@ process.stdin.on('end', () => {
 
 // ── Cache ─────────────────────────────────────────────────────
 
-const CACHE_FILE = path.join(os.homedir(), '.orrery', 'statusline-cache.json');
+// Cache lives inside the per-account config dir, so accounts are naturally
+// isolated — no in-file account key needed. Falls back to ~/.claude (the origin
+// account dir symlink) when CLAUDE_CONFIG_DIR is unset (bare `claude` at origin).
+const CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+const CACHE_FILE = path.join(CONFIG_DIR, 'statusline-cache.json');
 
 function readCache() {
   try { return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')); } catch {}
@@ -39,9 +43,7 @@ function writeCache(patch) {
 // credentials Claude is reading.
 function claudeJsonMtime() {
   try {
-    const p = process.env.CLAUDE_CONFIG_DIR
-      ? path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json')
-      : path.join(os.homedir(), '.claude.json');
+    const p = path.join(CONFIG_DIR, '.claude.json');
     return fs.statSync(p).mtimeMs;
   } catch { return 0; }
 }
@@ -59,31 +61,19 @@ function saveRateLimitsCache(rl) {
   writeCache({ rate_limits: rl, ts: Date.now() });
 }
 
-function accountCacheKey() {
-  // CLAUDE_CONFIG_DIR is the only thing that actually partitions credentials.
-  // ORRERY_ACTIVE_ENV in {unset, "", "origin"} all represent the same origin
-  // state, so don't fold it into the key — otherwise origin ends up writing
-  // under two different slots depending on whether the shell function ran.
-  const configDir = process.env.CLAUDE_CONFIG_DIR || '';
-  return configDir
-    ? `account_${crypto.createHash('sha256').update(configDir).digest('hex').slice(0, 8)}`
-    : 'account';
-}
-
 function loadAccountCache() {
+  // The cache file is per-account (it lives in the account config dir), so the
+  // directory is the partition — no in-file account key needed.
   const c = readCache();
-  const key = accountCacheKey();
-  const tsKey = `${key}_ts`;
-  if (!c[key]) return null;
-  const cachedTs = c[tsKey] || 0;
+  if (!c.account) return null;
+  const cachedTs = c.account_ts || 0;
   if (Date.now() - cachedTs >= 24 * 3600 * 1000) return null;
   if (claudeJsonMtime() > cachedTs) return null;
-  return c[key];
+  return c.account;
 }
 
 function saveAccountCache(acct) {
-  const key = accountCacheKey();
-  writeCache({ [key]: acct, [`${key}_ts`]: Date.now() });
+  writeCache({ account: acct, account_ts: Date.now() });
 }
 
 // ── Compaction count (derived from transcript JSONL) ──────────
