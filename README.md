@@ -14,7 +14,7 @@ orrery environment, and the project's memory directory — all in a single glanc
 | ---- | -------------------- | ----------- |
 | ★    | `專案` / `Project`    | Current working directory (home-shortened) plus the current git branch. A `(N)` badge counts dirty files. |
 | ◎    | `工作階段` / `Session` | Claude Code session id (from the JSON passed in on stdin). |
-| ◉    | `帳號` / `Account`    | Logged-in email, subscription plan (`max` / `pro` / `team` / `free`), and the configured model. The whole row is skipped when the email cannot be read. |
+| ◉    | `帳號` / `Account`    | Orrery account name (the identity `orrery use <name>` selects), logged-in email, subscription plan (`max` / `pro` / `team` / `free`), and the configured model. The row is skipped only when neither the account name nor the email can be read. |
 | ✎    | `Context`             | Context-window usage of the current conversation. The bar's right edge lines up with the `│` divider of the usage row below. |
 | ◈    | `用量` / `Usage`      | Claude rate-limit usage: **5h** window on the left, **7d** window on the right, each with a percentage and reset time. Cached for 8 hours so the bars stay visible between turns that don't carry live rate-limit data. |
 | ⊕    | `沙盒` / `Sandbox`    | The active orrery sandbox (`$ORRERY_ACTIVE_ENV`) and the path to its sandbox directory under `~/.orrery/envs/...`. Shows `origin` plus `~/.orrery/origin` when no sandbox is active. |
