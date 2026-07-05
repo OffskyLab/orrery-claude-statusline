@@ -111,6 +111,17 @@ function claudeKeychainService(configDir) {
 function readClaudeAccount() {
   const configDir = process.env.CLAUDE_CONFIG_DIR || null;
 
+  // Orrery account name — the identity `orrery use <name>` selects — from the
+  // account dir's metadata.json (`~/.claude` symlinks to the origin account dir
+  // when CLAUDE_CONFIG_DIR is unset). More reliably present than the email.
+  let name = null;
+  try {
+    const p = configDir
+      ? path.join(configDir, 'metadata.json')
+      : path.join(os.homedir(), '.claude', 'metadata.json');
+    name = JSON.parse(fs.readFileSync(p, 'utf8'))?.displayName || null;
+  } catch {}
+
   let email = null;
   try {
     const p = configDir
@@ -140,7 +151,7 @@ function readClaudeAccount() {
     model = JSON.parse(fs.readFileSync(p, 'utf8'))?.model || null;
   } catch {}
 
-  return { email, plan, model };
+  return { name, email, plan, model };
 }
 
 // ── i18n ──────────────────────────────────────────────────────
@@ -401,7 +412,7 @@ function render(data) {
   let acct = loadAccountCache();
   if (!acct) {
     acct = readClaudeAccount();
-    if (acct.email || acct.plan || acct.model) saveAccountCache(acct);
+    if (acct.name || acct.email || acct.plan || acct.model) saveAccountCache(acct);
   }
   const acctModel = (typeof data.model === 'string' ? data.model : null) || acct?.model || null;
 
@@ -428,9 +439,12 @@ function render(data) {
     rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}`);
   }
 
-  // ── ◉ acct  (email  plan  model) — only render when email is available
-  if (acct?.email) {
-    const parts = [`${A.gray}${acct.email}${A.reset}`];
+  // ── ◉ acct  (orrery name  email  plan  model) — render when we have the
+  // orrery account name or the email.
+  if (acct?.name || acct?.email) {
+    const parts = [];
+    if (acct.name) parts.push(`${A.bold}${A.cyan}${acct.name}${A.reset}`);
+    if (acct.email) parts.push(`${A.gray}${acct.email}${A.reset}`);
     if (acct.plan) parts.push(`${A.bold}${colorPlan(acct.plan)}${acct.plan}${A.reset}`);
     if (acctModel) parts.push(`${A.dim}${acctModel}${A.reset}`);
     rows.push(lbl('acct') + parts.join('  '));
