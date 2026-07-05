@@ -70,6 +70,9 @@ The label language follows `$LANG` / `$LC_ALL` / `$LC_MESSAGES`:
 
 ## Cache
 
-A small JSON cache at `~/.orrery/statusline-cache.json` keeps rate-limit data
-for 8 hours and account data for 24 hours so the statusline stays populated
-across turns. Delete this file to force a refresh.
+A small JSON cache lives inside the per-account config dir
+(`$CLAUDE_CONFIG_DIR/statusline-cache.json`, falling back to
+`~/.claude/statusline-cache.json` at origin), so each account's cache is
+naturally isolated. It keeps rate-limit data for 8 hours and account data for
+24 hours so the statusline stays populated across turns. Delete this file to
+force a refresh.
