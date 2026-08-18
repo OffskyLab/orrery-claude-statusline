@@ -40,6 +40,21 @@ readable account email) are omitted rather than shown empty.
 3. Start a new Claude Code session. The statusline reads the JSON payload
    Claude Code pipes to it on stdin, so no extra flags are needed.
 
+### Via `orrery thirdparty install statusline`
+
+Orrery's own installer does not point `settings.json` at this file directly.
+It installs two files:
+
+- `statusline.js` → the pinned workspace's shared claude dir (one copy, reused
+  by every account pinned to that workspace).
+- `statusline-dispatch.js` → the account dir, as `statusline.js`. This is what
+  `settings.json` actually points at, and it never has to change again: on
+  every render it reads the account's `metadata.json` for its *current*
+  workspace pin, resolves that workspace's dir via `orrery-bin
+  _workspace-dir`, and hands off to the `statusline.js` living there. So
+  `orrery pin <account> --workspace <name>` takes effect immediately, with no
+  settings.json edit or reinstall required.
+
 Requires Node.js (any recent LTS) and a terminal that renders ANSI colors and
 CJK-wide characters correctly.
 
