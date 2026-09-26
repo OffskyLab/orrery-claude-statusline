@@ -1,20 +1,26 @@
 #!/usr/bin/env node
 'use strict';
 
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-let raw = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', d => (raw += d));
-process.stdin.on('end', () => {
-  let data = {};
-  try { data = JSON.parse(raw); } catch {}
-  try { process.stdout.write(render(data)); } catch {}
-});
+function main() {
+  if (process.argv.includes('--refresh-scoped-limits')) {
+    refreshScopedLimits().finally(() => process.exit(0));
+    return;
+  }
+  let raw = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', d => (raw += d));
+  process.stdin.on('end', () => {
+    let data = {};
+    try { data = JSON.parse(raw); } catch {}
+    try { process.stdout.write(render(data)); } catch {}
+  });
+}
 
 // ── Cache ─────────────────────────────────────────────────────
 
@@ -76,6 +82,43 @@ function saveAccountCache(acct) {
   writeCache({ account: acct, account_ts: Date.now() });
 }
 
+// Model-scoped weekly windows (e.g. Fable) come from a network call, so they
+// are cached for SCOPED_TTL and refreshed in the background — the render path
+// never waits on the network. Rows stay visible (stale) for up to 24h so a
+// transient fetch failure doesn't make the row flicker away.
+const SCOPED_TTL      = 5 * 60 * 1000;
+const SCOPED_MAX_AGE  = 24 * 3600 * 1000;
+const SCOPED_LOCK_TTL = 60 * 1000;
+
+// Which account the scoped rows belong to. Claude Code rewrites .claude.json
+// constantly during a session, so the mtime rule the other caches use would
+// hide these rows most of the time; compare the account uuid instead, which
+// only changes when `orrery use` / phantom re-materializes the credentials.
+function scopedOwner() {
+  try {
+    const p = path.join(CONFIG_DIR, '.claude.json');
+    const acct = JSON.parse(fs.readFileSync(p, 'utf8'))?.oauthAccount;
+    return acct?.accountUuid || acct?.emailAddress || null;
+  } catch { return null; }
+}
+
+function loadScopedLimitsCache() {
+  const c = readCache();
+  const ts = c.scoped_limits_ts || 0;
+  const age = Date.now() - ts;
+  if (!Array.isArray(c.scoped_limits) || age >= SCOPED_MAX_AGE
+      || (c.scoped_limits_owner || null) !== scopedOwner()) {
+    return { rows: null, fresh: false };
+  }
+  return { rows: c.scoped_limits, fresh: age < SCOPED_TTL };
+}
+
+function saveScopedLimitsCache(rows) {
+  const patch = { scoped_limits_ts: Date.now(), scoped_limits_owner: scopedOwner() };
+  if (rows) patch.scoped_limits = rows;
+  writeCache(patch);
+}
+
 // ── Compaction count (derived from transcript JSONL) ──────────
 
 function readCompactCount(transcriptPath) {
@@ -108,6 +151,35 @@ function claudeKeychainService(configDir) {
   return `Claude Code-credentials-${hex}`;
 }
 
+// Parsed `Claude Code-credentials[-<hash>]` Keychain entry (macOS only); null
+// elsewhere or when the entry is missing.
+function readKeychainCredentials(configDir) {
+  if (process.platform !== 'darwin') return null;
+  try {
+    const svc = claudeKeychainService(configDir);
+    const user = process.env.USER || os.userInfo().username;
+    const out = execFileSync('security',
+      ['find-generic-password', '-s', svc, '-a', user, '-w'],
+      { timeout: 2000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).trim();
+    return JSON.parse(out);
+  } catch { return null; }
+}
+
+// The OAuth access token Claude Code itself is logged in with — the same
+// credential `/usage` uses. Keychain first (macOS), then the on-disk
+// `.credentials.json` Claude Code writes on other platforms. Never cached or
+// printed; only ever sent as a bearer to api.anthropic.com.
+function readOAuthToken() {
+  const configDir = process.env.CLAUDE_CONFIG_DIR || null;
+  const fromKeychain = readKeychainCredentials(configDir)?.claudeAiOauth?.accessToken;
+  if (fromKeychain) return fromKeychain;
+  try {
+    const p = path.join(CONFIG_DIR, '.credentials.json');
+    return JSON.parse(fs.readFileSync(p, 'utf8'))?.claudeAiOauth?.accessToken || null;
+  } catch { return null; }
+}
+
 function readClaudeAccount() {
   const configDir = process.env.CLAUDE_CONFIG_DIR || null;
 
@@ -130,18 +202,7 @@ function readClaudeAccount() {
     email = JSON.parse(fs.readFileSync(p, 'utf8'))?.oauthAccount?.emailAddress || null;
   } catch {}
 
-  let plan = null;
-  if (process.platform === 'darwin') {
-    try {
-      const svc = claudeKeychainService(configDir);
-      const user = process.env.USER || os.userInfo().username;
-      const out = execFileSync('security',
-        ['find-generic-password', '-s', svc, '-a', user, '-w'],
-        { timeout: 2000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
-      ).trim();
-      plan = JSON.parse(out)?.claudeAiOauth?.subscriptionType || null;
-    } catch {}
-  }
+  const plan = readKeychainCredentials(configDir)?.claudeAiOauth?.subscriptionType || null;
 
   let model = null;
   try {
@@ -152,6 +213,73 @@ function readClaudeAccount() {
   } catch {}
 
   return { name, email, plan, model };
+}
+
+// ── Model-scoped usage (claude.ai usage endpoint) ─────────────
+
+// The statusline stdin payload only carries the 5h / 7d windows. Per-model
+// weekly buckets (e.g. Fable) are only exposed by the claude.ai usage endpoint
+// that `/usage` reads, as `limits[]` rows of kind `weekly_scoped`. Pull those
+// out into the same {used_percentage, resets_at} shape the stdin windows use.
+function parseScopedLimits(body) {
+  const limits = body && Array.isArray(body.limits) ? body.limits : [];
+  const rows = [];
+  for (const row of limits) {
+    if (!row || row.kind !== 'weekly_scoped') continue;
+    const label = row.scope?.model?.display_name || row.scope?.surface?.display_name || null;
+    if (!label) continue;
+    const pct = typeof row.percent === 'number' ? parseFloat(row.percent.toFixed(2)) : 0;
+    const ts = row.resets_at ? Date.parse(row.resets_at) : NaN;
+    rows.push({
+      label,
+      used_percentage: pct,
+      resets_at: Number.isFinite(ts) ? Math.floor(ts / 1000) : null,
+    });
+  }
+  return rows;
+}
+
+const USAGE_ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
+
+// GET the usage endpoint with the bearer token. Returns parsed scoped rows, or
+// null on any failure (non-2xx, timeout, network). `fetchImpl` is injectable
+// for tests.
+async function fetchScopedLimits(token, fetchImpl = globalThis.fetch) {
+  try {
+    const res = await fetchImpl(USAGE_ENDPOINT, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'anthropic-beta': 'oauth-2025-04-20',
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    return parseScopedLimits(await res.json());
+  } catch { return null; }
+}
+
+// Background refresh entry (`--refresh-scoped-limits`): fetch, parse, and write
+// the cache. Always stamps scoped_limits_ts — even on failure or with no token
+// — so the render path doesn't respawn a refresh every 30s while offline.
+async function refreshScopedLimits(fetchImpl = globalThis.fetch) {
+  const token = readOAuthToken();
+  const rows = token ? await fetchScopedLimits(token, fetchImpl) : null;
+  saveScopedLimitsCache(rows);
+}
+
+// Kick off a detached refresh child and return immediately. A short lock in
+// the cache stops overlapping children when renders come in quick succession.
+function spawnScopedRefresh() {
+  try {
+    const c = readCache();
+    if (Date.now() - (c.scoped_limits_refresh_ts || 0) < SCOPED_LOCK_TTL) return;
+    writeCache({ scoped_limits_refresh_ts: Date.now() });
+    const child = spawn(process.execPath, [__filename, '--refresh-scoped-limits'], {
+      detached: true, stdio: 'ignore', env: process.env,
+    });
+    child.unref();
+  } catch {}
 }
 
 // ── i18n ──────────────────────────────────────────────────────
@@ -369,27 +497,31 @@ function displayWidth(s) {
 // Label column: icon + space + text, padded to LABEL_WIDTH display cols
 const LABEL_WIDTH = 12;
 
-function lbl(key) {
+function lbl(key, width = LABEL_WIDTH) {
   const icon  = ICONS[key]        || '';
   const text  = t(key)            || key;
   const color = LABEL_COLORS[key] || A.dim;
   const full  = `${icon} ${text}`;
-  const pad   = Math.max(0, LABEL_WIDTH - displayWidth(full));
+  const pad   = Math.max(0, width - displayWidth(full));
   return `${color}${full}${A.reset}${' '.repeat(pad)}`;
 }
 
-function usageLbl(duration) {
+function usageLblPlain(duration) {
+  return `${ICONS.usage} ${t('usage')} ${duration}`;
+}
+
+function usageLbl(duration, width = LABEL_WIDTH) {
   const icon  = ICONS.usage;
   const text  = t('usage');
   const color = LABEL_COLORS.usage;
-  const full  = `${icon} ${text} ${duration}`;
-  const pad   = Math.max(0, LABEL_WIDTH - displayWidth(full));
+  const full  = usageLblPlain(duration);
+  const pad   = Math.max(0, width - displayWidth(full));
   return `${color}${icon} ${text}${A.reset} ${A.dim}${duration}${A.reset}${' '.repeat(pad)}`;
 }
 
 // ── Render ────────────────────────────────────────────────────
 
-function render(data) {
+function render(data, { refresh = spawnScopedRefresh } = {}) {
   const cwd       = data.cwd || process.cwd();
   const sessionId = data.session_id || '';
   const ctxPct    = data.context_window?.used_percentage != null
@@ -407,6 +539,15 @@ function render(data) {
   const sevenD   = rl.seven_day  || {};
   const fivePct  = parseFloat((fiveH.used_percentage  ?? 0).toFixed(2));
   const sevenPct = parseFloat((sevenD.used_percentage ?? 0).toFixed(2));
+
+  // Model-scoped weekly rows (e.g. Fable): cache only; refresh in background.
+  const scoped = loadScopedLimitsCache();
+  const scopedRows = scoped.rows || [];
+  if (!scoped.fresh) refresh();
+
+  // Label column must fit the widest scoped label (e.g. "◈ Usage Fable").
+  const labelW = Math.max(LABEL_WIDTH,
+    ...scopedRows.map(r => displayWidth(usageLblPlain(r.label)) + 1));
 
   // Account info (cached 24h; read live on miss)
   let acct = loadAccountCache();
@@ -429,14 +570,14 @@ function render(data) {
     ? `${A.bold}${A.green}${branch}${dirty ? ` ${A.yellow}(${dirty})` : ''}${A.reset}`
     : '';
   rows.push(
-    lbl('project') +
+    lbl('project', labelW) +
     `${A.white}${shortenCwd(cwd)}${A.reset}` +
     (branchTag ? `  ${branchTag}` : '')
   );
 
   // ── ◎ session
   if (sessionId) {
-    rows.push(lbl('session') + `${A.gray}${sessionId}${A.reset}`);
+    rows.push(lbl('session', labelW) + `${A.gray}${sessionId}${A.reset}`);
   }
 
   // ── ◉ acct  (orrery name  email  plan  model) — render when we have the
@@ -447,7 +588,7 @@ function render(data) {
     if (acct.email) parts.push(`${A.gray}${acct.email}${A.reset}`);
     if (acct.plan) parts.push(`${A.bold}${colorPlan(acct.plan)}${acct.plan}${A.reset}`);
     if (acctModel) parts.push(`${A.dim}${acctModel}${A.reset}`);
-    rows.push(lbl('acct') + parts.join('  '));
+    rows.push(lbl('acct', labelW) + parts.join('  '));
   }
 
   const termW = process.stdout.columns || process.stderr.columns || 120;
@@ -458,11 +599,18 @@ function render(data) {
   const pct5Raw = `${fivePct}%`;
   const pct7Raw = `${sevenPct}%`;
   const ctxPctStr = ctxPct != null ? `${ctxPct}%` : '';
-  const pctColW = Math.max(pct5Raw.length, pct7Raw.length, ctxPctStr.length);
-  const fixed5 = LABEL_WIDTH + 1 + pctColW + displayWidth(reset5Plain);
-  const fixed7 = LABEL_WIDTH + 1 + pctColW + displayWidth(reset7Plain);
+  const scopedPlain = scopedRows.map(r => ({
+    label: r.label,
+    pct: r.used_percentage,
+    pctRaw: `${r.used_percentage}%`,
+    resetPlain: r.resets_at ? ` ↺ ${resetTimeStr(r.resets_at)}` : '',
+  }));
+  const pctColW = Math.max(pct5Raw.length, pct7Raw.length, ctxPctStr.length,
+    ...scopedPlain.map(r => r.pctRaw.length));
+  const fixedW = [reset5Plain, reset7Plain, ...scopedPlain.map(r => r.resetPlain)]
+    .map(rp => labelW + 1 + pctColW + displayWidth(rp));
   const BAR_MAX = 60;
-  const barW = Math.min(BAR_MAX, Math.max(16, termW - Math.max(fixed5, fixed7)));
+  const barW = Math.min(BAR_MAX, Math.max(16, termW - Math.max(...fixedW)));
 
   // ── ✎ Context  (same bar width as usage; compact count aligned with ↺ in usage rows)
   if (ctxPct != null) {
@@ -470,7 +618,7 @@ function render(data) {
     const compactCount = readCompactCount(data.transcript_path);
     const ctxPad = ' '.repeat(pctColW - ctxPctStr.length);
     const compactStr = ` ${A.gray}⚭ ${compactCount} ${t('compactUnit')}${A.reset}`;
-    rows.push(lbl('context') +
+    rows.push(lbl('context', labelW) +
       `${A.bold}${c}${quotaBar(ctxPct, barW)}${A.reset} ${A.bold}${c}${ctxPctStr}${A.reset}${ctxPad}${compactStr}`);
   }
 
@@ -484,8 +632,17 @@ function render(data) {
     const pct7Pad = ' '.repeat(pctColW - pct7Raw.length);
     const fiveStr  = `${A.bold}${c5}${quotaBar(fivePct, barW)}${A.reset} ${A.bold}${c5}${pct5Raw}${A.reset}${pct5Pad}${fiveReset}`;
     const sevenStr = `${A.bold}${c7}${quotaBar(sevenPct, barW)}${A.reset} ${A.bold}${c7}${pct7Raw}${A.reset}${pct7Pad}${sevenReset}`;
-    rows.push(usageLbl('5h') + fiveStr);
-    rows.push(usageLbl('7d') + sevenStr);
+    rows.push(usageLbl('5h', labelW) + fiveStr);
+    rows.push(usageLbl('7d', labelW) + sevenStr);
+
+    // ── ◈ usage <model>: per-model weekly windows from the usage endpoint
+    for (const r of scopedPlain) {
+      const c = colorPct(r.pct);
+      const reset = r.resetPlain ? ` ${A.gray}${r.resetPlain.trim()}${A.reset}` : '';
+      const pad = ' '.repeat(pctColW - r.pctRaw.length);
+      rows.push(usageLbl(r.label, labelW) +
+        `${A.bold}${c}${quotaBar(r.pct, barW)}${A.reset} ${A.bold}${c}${r.pctRaw}${A.reset}${pad}${reset}`);
+    }
   }
 
   // ── ⊕ sandbox  (name ▶︎ path)
@@ -494,13 +651,19 @@ function render(data) {
     const pathTag = envDir
       ? ` ${A.gray}▶︎${A.reset} ${A.gray}${homeShortenPath(envDir)}${A.reset}`
       : '';
-    rows.push(lbl('sandbox') + nameTag + pathTag);
+    rows.push(lbl('sandbox', labelW) + nameTag + pathTag);
   }
 
   // ── ◆ mem
   if (memDir) {
-    rows.push(lbl('mem') + `${A.gray}${shortenMemPath(memDir)}${A.reset}`);
+    rows.push(lbl('mem', labelW) + `${A.gray}${shortenMemPath(memDir)}${A.reset}`);
   }
 
   return rows.join('\n') + '\n';
 }
+
+// ── Entry ─────────────────────────────────────────────────────
+
+module.exports = { render, parseScopedLimits, fetchScopedLimits, readOAuthToken, refreshScopedLimits };
+
+if (require.main === module) main();
