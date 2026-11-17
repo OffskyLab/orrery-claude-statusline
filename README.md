@@ -13,7 +13,7 @@ orrery environment, and the project's memory directory — all in a single glanc
 | Icon | Label (zh-Hant / en) | Description |
 | ---- | -------------------- | ----------- |
 | ★    | `專案` / `Project`    | Current working directory (home-shortened) plus the current git branch. A `(N)` badge counts dirty files. |
-| ◎    | `工作階段` / `Session` | Claude Code session id (from the JSON passed in on stdin). |
+| ◎    | `工作階段` / `Session` | Session name (the `/rename` title, else the auto-generated title, read from the transcript) followed by the Claude Code session id. |
 | ◉    | `帳號` / `Account`    | Orrery account name (the identity `orrery use <name>` selects), logged-in email, subscription plan (`max` / `pro` / `team` / `free`), and the configured model. The row is skipped only when neither the account name nor the email can be read. |
 | ✎    | `Context`             | Context-window usage of the current conversation. The bar's right edge lines up with the `│` divider of the usage row below. |
 | ◈    | `用量` / `Usage`      | Claude rate-limit usage, one row per window: **5h**, **7d**, then one row per model-scoped weekly window the server reports for your plan (e.g. **Fable**), each with a percentage and reset time. The 5h / 7d rows are cached for 8 hours so the bars stay visible between turns that don't carry live rate-limit data. Model-scoped rows are only shown when `/usage` would list them; accounts without one get no extra row. |
