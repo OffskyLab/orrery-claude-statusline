@@ -162,6 +162,29 @@ function readTranscriptInfo(transcriptPath) {
   } catch { return empty; }
 }
 
+// ── Peer name (the address other sessions message this one by) ──
+// Claude Code writes one <config>/sessions/<pid>.json per running session with
+// its sessionId and `name` (the SendMessage address; nameSource "user" after a
+// /rename, "derived" from the cwd otherwise). Not cached: it changes on rename
+// and the directory holds only a handful of small files.
+
+function readPeerName(sessionId, configDir = CONFIG_DIR) {
+  if (!sessionId) return null;
+  const dir = path.join(configDir, 'sessions');
+  let files;
+  try { files = fs.readdirSync(dir); } catch { return null; }
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      if (s?.sessionId === sessionId && typeof s.name === 'string' && s.name.trim()) {
+        return s.name.trim();
+      }
+    } catch {}
+  }
+  return null;
+}
+
 // ── Account info ──────────────────────────────────────────────
 
 function claudeKeychainService(configDir) {
@@ -599,9 +622,12 @@ function render(data, { refresh = spawnScopedRefresh } = {}) {
   const transcript = readTranscriptInfo(data.transcript_path);
   const sessionName = (typeof data.session_name === 'string' && data.session_name.trim())
     || transcript.title;
-  if (sessionId || sessionName) {
+  const peerName = readPeerName(sessionId);
+  if (sessionId || sessionName || peerName) {
     const parts = [];
-    if (sessionName) parts.push(`${A.bold}${A.white}${sessionName}${A.reset}`);
+    // A /rename makes the peer name equal the title; show it once, as the address.
+    if (sessionName && sessionName !== peerName) parts.push(`${A.bold}${A.white}${sessionName}${A.reset}`);
+    if (peerName) parts.push(`${A.cyan}@${peerName}${A.reset}`);
     if (sessionId) parts.push(`${A.gray}${sessionId}${A.reset}`);
     rows.push(lbl('session', labelW) + parts.join('  '));
   }
