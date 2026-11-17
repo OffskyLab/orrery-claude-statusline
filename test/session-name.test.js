@@ -51,3 +51,26 @@ test('no title: just the session id', () => {
   const p = transcript([{ type: 'user', message: 'hi' }]);
   assert.match(sessionRow({ transcript_path: p }), /Session\s+sess-1$/);
 });
+
+function writePeer(pid, obj) {
+  const dir = path.join(TMP, 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${pid}.json`), JSON.stringify(obj));
+}
+
+test('shows the peer (SendMessage) name after the title', () => {
+  writePeer(111, { sessionId: 'other', name: 'not-me' });
+  writePeer(222, { sessionId: 'sess-peer', name: 'repo-d4', nameSource: 'derived' });
+  const p = transcript([{ type: 'ai-title', aiTitle: 'Auto title' }]);
+  const row = strip(render({ cwd: TMP, session_id: 'sess-peer', transcript_path: p }, noRefresh))
+    .split('\n').find(l => l.startsWith('◎'));
+  assert.match(row, /Auto title\s+@repo-d4\s+sess-peer$/);
+});
+
+test('a renamed session shows its name once, as the peer address', () => {
+  writePeer(333, { sessionId: 'sess-renamed', name: 'My rename', nameSource: 'user' });
+  const p = transcript([{ type: 'custom-title', customTitle: 'My rename' }]);
+  const row = strip(render({ cwd: TMP, session_id: 'sess-renamed', transcript_path: p }, noRefresh))
+    .split('\n').find(l => l.startsWith('◎'));
+  assert.match(row, /Session\s+@My rename\s+sess-renamed$/);
+});
