@@ -119,15 +119,33 @@ function saveScopedLimitsCache(rows) {
   writeCache(patch);
 }
 
-// ── Compaction count (derived from transcript JSONL) ──────────
+// ── Transcript info: compaction count + session title ─────────
+// One read of the transcript JSONL yields both, cached by mtime+size.
+// Title: the last `/rename` (custom-title) wins over the last auto-generated
+// ai-title.
 
-function readCompactCount(transcriptPath) {
-  if (!transcriptPath) return 0;
+function lastTitle(data, type, field) {
+  const idx = data.lastIndexOf(`"type":"${type}"`);
+  if (idx === -1) return null;
+  const start = data.lastIndexOf('\n', idx) + 1;
+  let end = data.indexOf('\n', idx);
+  if (end === -1) end = data.length;
+  try {
+    const v = JSON.parse(data.slice(start, end))?.[field];
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  } catch { return null; }
+}
+
+function readTranscriptInfo(transcriptPath) {
+  const empty = { compactCount: 0, title: null };
+  if (!transcriptPath) return empty;
   try {
     const stat = fs.statSync(transcriptPath);
     const cacheKey = `${transcriptPath}:${stat.mtimeMs}:${stat.size}`;
     const c = readCache();
-    if (c.compact && c.compact.key === cacheKey) return c.compact.count;
+    if (c.transcript && c.transcript.key === cacheKey) {
+      return { compactCount: c.transcript.count || 0, title: c.transcript.title || null };
+    }
 
     const data = fs.readFileSync(transcriptPath, 'utf8');
     let count = 0;
@@ -137,9 +155,11 @@ function readCompactCount(transcriptPath) {
       count++;
       idx += marker.length;
     }
-    writeCache({ compact: { key: cacheKey, count } });
-    return count;
-  } catch { return 0; }
+    const title = lastTitle(data, 'custom-title', 'customTitle')
+      || lastTitle(data, 'ai-title', 'aiTitle');
+    writeCache({ transcript: { key: cacheKey, count, title } });
+    return { compactCount: count, title };
+  } catch { return empty; }
 }
 
 // ── Account info ──────────────────────────────────────────────
@@ -576,8 +596,14 @@ function render(data, { refresh = spawnScopedRefresh } = {}) {
   );
 
   // ── ◎ session
-  if (sessionId) {
-    rows.push(lbl('session', labelW) + `${A.gray}${sessionId}${A.reset}`);
+  const transcript = readTranscriptInfo(data.transcript_path);
+  const sessionName = (typeof data.session_name === 'string' && data.session_name.trim())
+    || transcript.title;
+  if (sessionId || sessionName) {
+    const parts = [];
+    if (sessionName) parts.push(`${A.bold}${A.white}${sessionName}${A.reset}`);
+    if (sessionId) parts.push(`${A.gray}${sessionId}${A.reset}`);
+    rows.push(lbl('session', labelW) + parts.join('  '));
   }
 
   // ── ◉ acct  (orrery name  email  plan  model) — render when we have the
@@ -615,7 +641,7 @@ function render(data, { refresh = spawnScopedRefresh } = {}) {
   // ── ✎ Context  (same bar width as usage; compact count aligned with ↺ in usage rows)
   if (ctxPct != null) {
     const c = colorPct(ctxPct);
-    const compactCount = readCompactCount(data.transcript_path);
+    const compactCount = transcript.compactCount;
     const ctxPad = ' '.repeat(pctColW - ctxPctStr.length);
     const compactStr = ` ${A.gray}⚭ ${compactCount} ${t('compactUnit')}${A.reset}`;
     rows.push(lbl('context', labelW) +
